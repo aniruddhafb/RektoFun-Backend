@@ -1,0 +1,29 @@
+## Backend Memory
+
+- Stack: FastAPI app in [main.py](/home/shravan/Rektofun/RektoFun-be/main.py) with Supabase as the hosted PostgreSQL layer.
+- Challenge persistence flow: the frontend creates the challenge on Solana first, then calls `POST /challenges` only after `sendTransaction(...)` confirms.
+- Active backend routes:
+  - `GET /health`
+  - `POST /challenges`
+  - `GET /challenges`
+  - `GET /challenges/{challenge_id}`
+  - `GET /challenges/pda/{challenge_pda}`
+- Supabase config is environment-driven:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY` preferred, with `SUPABASE_ANON_KEY` as fallback
+  - `CORS_ORIGINS` as a comma-separated list
+- Database schema source of truth is [supabase_schema.sql](/home/shravan/Rektofun/RektoFun-be/supabase_schema.sql).
+- `challenges` table stores both on-chain identifiers and UI metadata:
+  - `tx_signature`
+  - `challenge_pda`
+  - `challenge_id`
+  - `creator_wallet`
+  - `market`
+  - `asset`
+  - `bet_amount_sol`
+  - `target_price_usd_cents`
+  - `direction_above`
+  - `expires_at`
+  - `resolves_at`
+  - `status`
+- Local backend env template lives in [`.env.example`](/home/shravan/Rektofun/RektoFun-be/.env.example).
