@@ -19,5 +19,7 @@ htmlcov/
 # Notebook checkpoints
 .ipynb_checkpoints/
 
+.env
+.env.local
 .env.example
 env.example

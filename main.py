@@ -45,7 +45,7 @@ class Settings(BaseModel):
             origin.strip()
             for origin in os.getenv(
                 "CORS_ORIGINS",
-                "http://localhost:3000,http://127.0.0.1:3000",
+                "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:8000",
             ).split(",")
             if origin.strip()
         ]
@@ -129,16 +129,35 @@ def _coerce_challenge(row: dict) -> ChallengeResponse:
 
 @app.get("/")
 def root() -> dict[str, str]:
+    """
+    Example:
+        curl http://localhost:8000/
+    """
     return {"message": "RektoFun API is running", "version": "1.0.0"}
 
 
-@app.get("/health")
-def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, object]:
+app = FastAPI()
+
+@app.get("/health/supabase-env")
+def health():
     return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "supabase_configured": bool(settings.supabase_url and settings.supabase_key),
+        "SUPABASE_URL_set": bool(os.getenv("SUPABASE_URL")),
+        "SUPABASE_SERVICE_ROLE_KEY_set": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+        "SUPABASE_ANON_KEY_set": bool(os.getenv("SUPABASE_ANON_KEY")),
     }
+
+
+# @app.get("/health")
+# def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, object]:
+#     """
+#     Example:
+#         curl http://localhost:8000/health
+#     """
+#     return {
+#         "status": "ok",
+#         "timestamp": datetime.now(timezone.utc).isoformat(),
+#         "supabase_configured": bool(settings.supabase_url and settings.supabase_key),
+#     }
 
 
 @app.post("/challenges", response_model=ChallengeResponse, status_code=201)
@@ -146,6 +165,24 @@ def create_challenge(
     challenge: ChallengeCreate,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> ChallengeResponse:
+    """
+    Example:
+        curl -X POST http://localhost:8000/challenges \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "tx_signature": "5hKz...example",
+            "challenge_pda": "9xQeWvG816bUx9EPjHmaT23yvVMiL8b5x8example",
+            "challenge_id": 1,
+            "creator_wallet": "7YkS7x...example",
+            "market": "SOL-PERP",
+            "asset": "SOL",
+            "bet_amount_sol": 0.5,
+            "target_price_usd_cents": 17500,
+            "direction_above": true,
+            "expires_at": 1770000000,
+            "resolves_at": 1770003600
+          }'
+    """
     if challenge.resolves_at <= challenge.expires_at:
         raise HTTPException(
             status_code=422,
@@ -184,6 +221,10 @@ def get_challenges(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ChallengeListResponse:
+    """
+    Example:
+        curl "http://localhost:8000/challenges?status=open&asset=SOL&creator_wallet=7YkS7x...example&limit=10&offset=0"
+    """
     query = supabase.table("challenges").select("*")
 
     if status is not None:
@@ -217,6 +258,10 @@ def get_challenge_by_id(
     challenge_id: int,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> ChallengeResponse:
+    """
+    Example:
+        curl http://localhost:8000/challenges/1
+    """
     try:
         result = (
             supabase.table("challenges")
@@ -243,6 +288,10 @@ def get_challenge_by_pda(
     challenge_pda: str,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> ChallengeResponse:
+    """
+    Example:
+        curl http://localhost:8000/challenges/pda/9xQeWvG816bUx9EPjHmaT23yvVMiL8b5x8example
+    """
     try:
         result = (
             supabase.table("challenges")
