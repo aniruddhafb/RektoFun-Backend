@@ -136,8 +136,6 @@ def root() -> dict[str, str]:
     return {"message": "RektoFun API is running", "version": "1.0.0"}
 
 
-app = FastAPI()
-
 @app.get("/health/supabase-env")
 def health():
     return {
