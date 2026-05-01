@@ -17,6 +17,16 @@ class ClanCreate(BaseModel):
     clan_leader: str = Field(min_length=1)  # User ID, not wallet address
 
 
+class ClanUpdate(BaseModel):
+    """Model for updating an existing clan."""
+    clan_name: str = Field(min_length=1, max_length=100)
+    clan_description: Optional[str] = Field(default=None, max_length=1000)
+    clan_image: Optional[str] = Field(default=None)
+    max_members: int = Field(default=50, ge=5, le=100)
+    clan_status: str = Field(default="public")  # "public" or "invite_only"
+    clan_region: Optional[str] = Field(default=None)
+
+
 class ClanResponse(BaseModel):
     """Model for clan response data."""
     id: str
