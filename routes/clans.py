@@ -1,24 +1,156 @@
 """Clan chat API endpoints."""
 
-from typing import Annotated
+from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from supabase import Client
 
 from config import get_supabase
 from models.clan import (
+    ClanCreate,
     ClanMessageCreate,
     ClanMessageListResponse,
     ClanMessageResponse,
+    ClanResponse,
     coerce_clan_message,
 )
 
 router = APIRouter(prefix="/clans", tags=["clans"])
 
 
-@router.get("/{clan_slug}/messages", response_model=ClanMessageListResponse)
+class PaginatedClansResponse(BaseModel):
+    """Response model for paginated clans list."""
+    clans: List[ClanResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("", response_model=PaginatedClansResponse)
+def get_clans(
+    supabase: Annotated[Client, Depends(get_supabase)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PaginatedClansResponse:
+    """
+    Get all clans with pagination.
+
+    Example:
+        curl "http://localhost:8000/clans?limit=10&offset=0"
+    """
+    try:
+        # Get total count
+        count_result = (
+            supabase.table("clans")
+            .select("*", count="exact")
+            .execute()
+        )
+        total = count_result.count or 0
+
+        # Get paginated clans
+        result = (
+            supabase.table("clans")
+            .select("*")
+            .order("created_at", desc=True)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch clans: {str(exc)}",
+        ) from exc
+
+    clans = result.data or []
+    return PaginatedClansResponse(
+        clans=[
+            ClanResponse(
+                id=clan["id"],
+                clan_name=clan["clan_name"],
+                clan_description=clan.get("clan_description"),
+                clan_image=clan.get("clan_image"),
+                max_members=clan["max_members"],
+                clan_leader=clan["clan_leader"],
+                clan_members=clan.get("clan_members", []),
+                clan_status=clan["clan_status"],
+                clan_region=clan.get("clan_region"),
+                created_at=clan.get("created_at"),
+                updated_at=clan.get("updated_at"),
+            )
+            for clan in clans
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("", response_model=ClanResponse, status_code=201)
+def create_clan(
+    clan_data: ClanCreate,
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> ClanResponse:
+    """
+    Create a new clan.
+
+    Example:
+        curl -X POST http://localhost:8000/clans \
+          -H "Content-Type: application/json" \
+          -d '{
+            "clan_name": "Crypto Warriors",
+            "clan_description": "Elite trading clan",
+            "max_members": 50,
+            "clan_status": "public",
+            "clan_region": "US",
+            "clan_leader": "user-uuid-here"
+          }'
+    """
+    # Insert the clan into the database
+    try:
+        result = (
+            supabase.table("clans")
+            .insert({
+                "clan_name": clan_data.clan_name,
+                "clan_description": clan_data.clan_description,
+                "clan_image": clan_data.clan_image,
+                "max_members": clan_data.max_members,
+                "clan_leader": clan_data.clan_leader,
+                "clan_members": [clan_data.clan_leader],  # Leader is first member
+                "clan_status": clan_data.clan_status,
+                "clan_region": clan_data.clan_region,
+            })
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create clan: {str(exc)}",
+        ) from exc
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to create clan")
+
+    clan = result.data[0]
+
+    return ClanResponse(
+        id=clan["id"],
+        clan_name=clan["clan_name"],
+        clan_description=clan.get("clan_description"),
+        clan_image=clan.get("clan_image"),
+        max_members=clan["max_members"],
+        clan_leader=clan["clan_leader"],
+        clan_members=clan.get("clan_members", []),
+        clan_status=clan["clan_status"],
+        clan_region=clan.get("clan_region"),
+        created_at=clan.get("created_at"),
+        updated_at=clan.get("updated_at"),
+    )
+
+
+@router.get("/{clan_id}/messages", response_model=ClanMessageListResponse)
 def get_clan_messages(
-    clan_slug: str,
+    clan_id: str,
     supabase: Annotated[Client, Depends(get_supabase)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -27,29 +159,8 @@ def get_clan_messages(
     Get messages for a clan. Only accessible by clan members.
 
     Example:
-        curl "http://localhost:8000/clans/alpha-syndicate/messages?limit=20"
+        curl "http://localhost:8000/clans/clan-uuid/messages?limit=20"
     """
-    # First get the clan by slug
-    try:
-        clan_result = (
-            supabase.table("clans")
-            .select("id")
-            .eq("slug", clan_slug)
-            .limit(1)
-            .execute()
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch clan: {exc}",
-        ) from exc
-
-    clan_rows = clan_result.data or []
-    if not clan_rows:
-        raise HTTPException(status_code=404, detail="Clan not found")
-
-    clan_id = clan_rows[0]["id"]
-
     # Get messages with sender info (username and profile_image)
     try:
         result = (
@@ -95,9 +206,9 @@ def get_clan_messages(
     return ClanMessageListResponse(messages=messages, count=len(messages))
 
 
-@router.post("/{clan_slug}/messages", response_model=ClanMessageResponse, status_code=201)
+@router.post("/{clan_id}/messages", response_model=ClanMessageResponse, status_code=201)
 def create_clan_message(
-    clan_slug: str,
+    clan_id: str,
     message_data: ClanMessageCreate,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> ClanMessageResponse:
@@ -105,40 +216,19 @@ def create_clan_message(
     Send a message to a clan chat. User must be a clan member.
 
     Example:
-        curl -X POST http://localhost:8000/clans/alpha-syndicate/messages \
+        curl -X POST http://localhost:8000/clans/clan-uuid/messages \
           -H "Content-Type: application/json" \
           -d '{
-            "clan_id": "uuid-here",
+            "clan_id": "clan-uuid-here",
             "sender_id": "user-uuid-here",
             "message": "Hello clan!"
           }'
     """
-    # First get the clan by slug
-    try:
-        clan_result = (
-            supabase.table("clans")
-            .select("id")
-            .eq("slug", clan_slug)
-            .limit(1)
-            .execute()
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch clan: {exc}",
-        ) from exc
-
-    clan_rows = clan_result.data or []
-    if not clan_rows:
-        raise HTTPException(status_code=404, detail="Clan not found")
-
-    clan_id = clan_rows[0]["id"]
-
-    # Verify the clan_id in body matches the slug
+    # Verify the clan_id in body matches the path
     if message_data.clan_id != clan_id:
         raise HTTPException(
             status_code=400,
-            detail="Clan ID does not match the slug",
+            detail="Clan ID does not match the path",
         )
 
     # Insert the message
@@ -183,9 +273,9 @@ def create_clan_message(
     )
 
 
-@router.delete("/{clan_slug}/messages/{message_id}", status_code=204)
+@router.delete("/{clan_id}/messages/{message_id}", status_code=204)
 def delete_clan_message(
-    clan_slug: str,
+    clan_id: str,
     message_id: str,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> None:
@@ -193,7 +283,7 @@ def delete_clan_message(
     Delete a message. User must be the sender.
 
     Example:
-        curl -X DELETE http://localhost:8000/clans/alpha-syndicate/messages/message-uuid-here
+        curl -X DELETE http://localhost:8000/clans/clan-uuid/messages/message-uuid-here
     """
     try:
         supabase.table("clan_messages").delete().eq("id", message_id).execute()

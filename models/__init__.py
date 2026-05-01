@@ -13,6 +13,13 @@ from models.challenge_outcome import (
     ChallengeOutcomeListResponse,
     ChallengeOutcomeResponse,
 )
+from models.clan import (
+    ClanCreate,
+    ClanMessageCreate,
+    ClanMessageListResponse,
+    ClanMessageResponse,
+    ClanResponse,
+)
 from models.user import (
     UserCreate,
     UserListResponse,
@@ -30,6 +37,11 @@ __all__ = [
     "ChallengeOutcomeCreate",
     "ChallengeOutcomeResponse",
     "ChallengeOutcomeListResponse",
+    "ClanCreate",
+    "ClanResponse",
+    "ClanMessageCreate",
+    "ClanMessageResponse",
+    "ClanMessageListResponse",
     "UserCreate",
     "UserUpdate",
     "UserResponse",
