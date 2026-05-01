@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from supabase import Client
 
 from config import get_supabase
@@ -91,6 +91,62 @@ def create_user(
         raise HTTPException(status_code=500, detail="Failed to create user")
 
     return coerce_user(result.data[0])
+
+
+@router.get("/leaderboard", response_model=UserListResponse)
+def get_leaderboard(
+    supabase: Annotated[Client, Depends(get_supabase)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    search: str | None = None,
+) -> UserListResponse:
+    """
+    Get users ranked by referral count for the leaderboard.
+    Returns users sorted by number of referrals (descending - most referrals first).
+    Each user's points are calculated as: referral_count * 100
+
+    Example:
+        curl "http://localhost:8000/users/leaderboard?limit=10&offset=0"
+        curl "http://localhost:8000/users/leaderboard?search=trader&limit=10&offset=0"
+    """
+    try:
+        # Fetch all users with their referrals count
+        # We need to order by the length of the referrals array
+        # Supabase doesn't directly support ordering by array length,
+        # so we fetch all and sort in Python
+        result = (
+            supabase.table("users")
+            .select("*")
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch leaderboard: {exc}",
+        ) from exc
+
+    rows = result.data or []
+    
+    # Filter by username if search query is provided
+    if search:
+        search_lower = search.lower()
+        rows = [row for row in rows if row.get("username") and search_lower in row.get("username", "").lower()]
+    
+    # Sort by referral count (descending - most referrals first)
+    # Points = referral_count * 100
+    sorted_rows = sorted(
+        rows,
+        key=lambda x: len(x.get("referrals") or []),
+        reverse=True
+    )
+    
+    # Apply pagination to sorted results
+    paginated_rows = sorted_rows[offset:offset + limit]
+    
+    return UserListResponse(
+        users=[coerce_user(row) for row in paginated_rows],
+        count=len(sorted_rows),
+    )
 
 
 @router.get("", response_model=UserListResponse)
@@ -299,3 +355,93 @@ def delete_user(
             status_code=500,
             detail=f"Failed to delete user: {exc}",
         ) from exc
+
+
+@router.post("/accept-referral", response_model=UserResponse)
+def accept_referral(
+    body: Annotated[dict, Body(...)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> UserResponse:
+    """
+    Accept a referral by linking the new user's wallet to a referrer.
+    Both users must exist.
+
+    Example:
+        curl -X POST "http://localhost:8000/users/accept-referral" \\
+          -H "Content-Type: application/json" \\
+          -d '{"new_user_wallet": "7YkS7x...new", "referrer_wallet": "7YkS7x...ref"}'
+    """
+    new_user_wallet = body.get("new_user_wallet")
+    referrer_code = body.get("referrer_code")
+
+    if not new_user_wallet or not referrer_code:
+        raise HTTPException(status_code=400, detail="new_user_wallet and referrer_code are required")
+
+    # Find the new user
+    try:
+        new_user_result = (
+            supabase.table("users")
+            .select("*")
+            .eq("wallet_address", new_user_wallet)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to find new user: {exc}",
+        ) from exc
+
+    if not new_user_result.data:
+        raise HTTPException(status_code=404, detail="New user not found")
+
+    new_user = new_user_result.data[0]
+
+    # Find the referrer by their referral_code (not wallet address)
+    try:
+        referrer_result = (
+            supabase.table("users")
+            .select("*")
+            .eq("referral_code", referrer_code)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to find referrer: {exc}",
+        ) from exc
+
+    if not referrer_result.data:
+        raise HTTPException(status_code=404, detail="Referrer not found")
+
+    referrer = referrer_result.data[0]
+
+    # Update the new user's referred_by field to the referrer's user ID
+    try:
+        result = (
+            supabase.table("users")
+            .update({"referred_by": referrer["id"]})
+            .eq("wallet_address", new_user_wallet)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to accept referral: {exc}",
+        ) from exc
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to accept referral")
+
+    # Update the referrer's referrals list (append new user's ID)
+    current_referrals = referrer.get("referrals", [])
+    if new_user["id"] not in current_referrals:
+        try:
+            supabase.table("users").update(
+                {"referrals": current_referrals + [new_user["id"]]}
+            ).eq("id", referrer["id"]).execute()
+        except Exception:
+            pass  # Non-critical error, ignore
+
+    return coerce_user(result.data[0])
