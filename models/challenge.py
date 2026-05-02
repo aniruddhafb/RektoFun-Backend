@@ -123,7 +123,7 @@ class ChallengeListResponse(BaseModel):
     count: int
 
 
-class ChallengeAccept(BaseModel):
+class ChallengeJoin(BaseModel):
     challenge_id: UUID
     user_id: str 
     side: SideKey

@@ -8,7 +8,7 @@ from supabase import Client
 
 from config import get_supabase
 from models.challenge import (
-    ChallengeAccept,
+    ChallengeJoin,
     ChallengeCreate,
     ChallengeListResponse,
     ChallengeResponse,
@@ -305,20 +305,42 @@ def delete_challenge(
         ) from exc
 
 
-@router.post("/accept", status_code=201)
-def accept_challenge(
-    accept_data: ChallengeAccept,
+@router.post("/join", status_code=201)
+def join_challenge(
+    join_data: ChallengeJoin,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> dict:
     """
-    Accept a challenge by creating a side and a position.
+    Join a challenge by creating a side and a position.
     """
+    # Check if user has already joined this challenge
+    try:
+        existing_position = (
+            supabase.table("positions")
+            .select("id")
+            .eq("challenge_id", join_data.challenge_id)
+            .eq("user_id", join_data.user_id)
+            .execute()
+        )
+        if existing_position.data:
+            raise HTTPException(
+                status_code=400,
+                detail="User has already joined this challenge"
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check existing position: {exc}",
+        ) from exc
+
     # 1. Create challenge side
     side_payload = serialize_payload({
-        "challenge_id": accept_data.challenge_id,
-        "side_key": accept_data.side.value,
-        "display_name": accept_data.side.value,
-        "total_amount": accept_data.bet_amount,
+        "challenge_id": join_data.challenge_id,
+        "side_key": join_data.side.value,
+        "display_name": join_data.side.value,
+        "total_amount": join_data.bet_amount,
     })
 
     try:
@@ -340,10 +362,10 @@ def accept_challenge(
 
     # 2. Create position
     position_payload = serialize_payload({
-        "challenge_id": accept_data.challenge_id,
+        "challenge_id": join_data.challenge_id,
         "side_id": side_id,
-        "user_id": accept_data.user_id,
-        "amount": accept_data.bet_amount,
+        "user_id": join_data.user_id,
+        "amount": join_data.bet_amount,
     })
 
     try:
