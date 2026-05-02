@@ -1,6 +1,7 @@
 """User API endpoints."""
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from supabase import Client
@@ -194,7 +195,7 @@ def get_users(
 
 @router.get("/{user_id}", response_model=UserResponse)
 def get_user_by_id(
-    user_id: str,
+    user_id: UUID,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> UserResponse:
     """
@@ -258,7 +259,7 @@ def get_user_by_wallet(
 
 @router.patch("/{user_id}", response_model=UserResponse)
 def update_user(
-    user_id: str,
+    user_id: UUID,
     user_update: UserUpdate,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> UserResponse:
@@ -321,7 +322,7 @@ def update_user(
 
 @router.delete("/{user_id}", status_code=204, response_model=None)
 def delete_user(
-    user_id: str,
+    user_id: UUID,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> None:
     """

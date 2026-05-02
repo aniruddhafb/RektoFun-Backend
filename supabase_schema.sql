@@ -1,48 +1,69 @@
 -- Challenges table
 create table if not exists public.challenges (
-  id uuid primary key default gen_random_uuid(),
+  id uuid not null default gen_random_uuid(),
 
+  -- 🧾 Basic Info
   title text not null,
-  description text,
+  description text null,
+  category text not null,
+  subcategory text null,
+  event_type text not null, -- binary, multi_outcome, etc
+  ticker text null,
 
-  category text not null, -- crypto, sports, politics, etc
-  subcategory text,       -- btc, football, elections
+  -- 👤 User
+  created_by text null,
 
-  event_type text not null, 
-  -- binary, multi_outcome, numeric_range
+  -- ⚙️ Mode
+  mode text not null, -- 'pvp' | 'pool'
 
-  ticker text, -- optional (BTC, AAPL, etc)
+  -- 💰 Betting Core
+  initial_bet integer not null, -- creator's bet (USDC, integer only)
 
-  created_by text references users(wallet_address) on delete set null,
+  -- PvP constraints
+  min_accept_bet integer null,
+  max_accept_bet integer null,
 
-  status text not null default 'open',
-  -- open, locked, resolved, cancelled
+  -- Pool constraints
+  min_bet integer not null default 1, -- >= 1 USDC
+  bet_unit integer not null default 1, -- enforce integer bets
 
-  resolution_source text, -- API, oracle, manual
-  resolution_details jsonb,
+  total_pool bigint not null default 0,
 
-  expire_time timestamptz not null, -- no more entries
-  resolve_time timestamptz,         -- when outcome known
+  -- ⏱️ Timing
+  expire_time timestamptz not null,
+  resolve_time timestamptz null,
+  resolved_at timestamptz null,
 
-  result jsonb, -- flexible outcome storage
+  -- 📊 Status
+  status text not null default 'open', 
+  -- open | locked | resolved | cancelled
 
-  metadata jsonb, -- extra config (thresholds, rules)
+  resolution_status text not null default 'pending',
+  -- pending | fetching | resolved | failed | disputed
 
+  resolution_mode text not null default 'at_time',
+  -- at_time | anytime_before | event_based
+
+  -- 🔮 Oracle Config
+  resolution_source text null,
+  resolution_config jsonb not null,
+
+  -- 🏁 Result
+  result jsonb null,
+
+  -- 🎨 UI / Display
+  metadata jsonb null,
+
+  -- 🕒 Timestamps
   created_at timestamptz default now(),
-  updated_at timestamptz default now()
-);
+  updated_at timestamptz default now(),
 
--- Challenge outcomes table
-create table if not exists public.challenge_outcomes (
-  id uuid primary key default gen_random_uuid(),
-  challenge_id uuid references challenges(id) on delete cascade,
-
-  outcome_key text not null, -- "YES", "NO", "TEAM_A", "100K_PLUS"
-  title text not null,
-
-  metadata jsonb,
-
-  created_at timestamptz default now()
+  -- 🔐 Constraints
+  constraint challenges_pkey primary key (id),
+  constraint challenges_category_fkey 
+    foreign key (category) references markets (name),
+  constraint challenges_created_by_fkey 
+    foreign key (created_by) references users (wallet_address) on delete set null
 );
 
 -- Indexes for challenges
@@ -57,10 +78,6 @@ create index if not exists challenges_status_idx
 
 create index if not exists challenges_expire_time_idx
     on public.challenges (expire_time);
-
--- Indexes for challenge_outcomes
-create index if not exists challenge_outcomes_challenge_id_idx
-    on public.challenge_outcomes (challenge_id);
 
 -- Trigger to auto-update updated_at
 create or replace function public.set_updated_at()
