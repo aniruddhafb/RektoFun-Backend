@@ -13,6 +13,13 @@ from models.challenge_outcome import (
     ChallengeOutcomeListResponse,
     ChallengeOutcomeResponse,
 )
+from models.market import (
+    MarketCreate,
+    MarketListResponse,
+    MarketResponse,
+    MarketType,
+    MarketUpdate,
+)
 from models.user import (
     UserCreate,
     UserListResponse,
@@ -30,6 +37,11 @@ __all__ = [
     "ChallengeOutcomeCreate",
     "ChallengeOutcomeResponse",
     "ChallengeOutcomeListResponse",
+    "MarketType",
+    "MarketCreate",
+    "MarketUpdate",
+    "MarketResponse",
+    "MarketListResponse",
     "UserCreate",
     "UserUpdate",
     "UserResponse",
