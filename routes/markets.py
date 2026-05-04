@@ -34,7 +34,7 @@ def create_market(
           -H "Content-Type: application/json" \\
           -d '{
             "name": "Crypto Markets",
-            "slug": "crypto-markets",
+            "symbol": "crypto-markets",
             "description": "Cryptocurrency prediction markets",
             "market_type": "binary",
             "is_active": true
@@ -80,7 +80,10 @@ def get_markets(
     if market_type is not None:
         query = query.eq("market_type", market_type)
     if parent_id is not None:
-        query = query.eq("parent_id", parent_id)
+        if parent_id.lower() == "null":
+            query = query.is_("parent_id", "null")
+        else:
+            query = query.eq("parent_id", parent_id)
     if is_active is not None:
         query = query.eq("is_active", is_active)
 
@@ -135,22 +138,22 @@ def get_market_by_id(
     return coerce_market(rows[0])
 
 
-@router.get("/slug/{slug}", response_model=MarketResponse)
+@router.get("/symbol/{symbol}", response_model=MarketResponse)
 def get_market_by_slug(
-    slug: str,
+    symbol: str,
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> MarketResponse:
     """
-    Get a market by its slug.
+    Get a market by its symbol.
 
     Example:
-        curl http://localhost:8000/markets/slug/crypto-markets
+        curl http://localhost:8000/markets/symbol/crypto-markets
     """
     try:
         result = (
             supabase.table("markets")
             .select("*")
-            .eq("slug", slug)
+            .eq("symbol", symbol)
             .limit(1)
             .execute()
         )

@@ -45,7 +45,6 @@ class ChallengeCreate(BaseModel):
     title: str = Field(min_length=1)
     description: str | None = None
     category: UUID = Field(description="Reference to markets table id")
-    subcategory: str | None = None
     event_type: EventType
     ticker: str | None = None
     created_by: str | None = None
@@ -67,7 +66,6 @@ class ChallengeUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     category: UUID | None = None
-    subcategory: str | None = None
     event_type: EventType | None = None
     ticker: str | None = None
     mode: Mode | None = None
@@ -95,7 +93,6 @@ class ChallengeResponse(BaseModel):
     title: str
     description: str | None
     category: UUID
-    subcategory: str | None
     event_type: str
     ticker: str | None
     created_by: str | None

@@ -85,7 +85,6 @@ def create_challenge(
             "title": "Will BTC reach $100k by end of 2025?",
             "description": "Binary prediction market for Bitcoin price",
             "category": "crypto",
-            "subcategory": "btc",
             "event_type": "binary",
             "ticker": "BTC",
             "mode": "pool",

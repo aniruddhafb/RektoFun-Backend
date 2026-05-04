@@ -21,7 +21,7 @@ def coerce_user(row: dict) -> UserResponse:
 def create_user(
     user: UserCreate,
     supabase: Annotated[Client, Depends(get_supabase)],
-) -> dict:
+) -> UserResponse:
     """
     Create a new user. If a user with the same wallet_address already exists,
     returns the existing user instead of creating a duplicate.
@@ -91,7 +91,7 @@ def create_user(
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to create user")
 
-    return {"status": "ok"}
+    return coerce_user(result.data[0])
 
 
 @router.get("/leaderboard", response_model=UserListResponse)

@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS public.markets (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   name text NOT NULL,
-  slug text NOT NULL,
+  symbol text NOT NULL,
   description text NULL,
   image text NULL,
   icon text NULL,
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS public.markets (
   updated_at timestamp with time zone NULL DEFAULT now(),
   CONSTRAINT markets_pkey PRIMARY KEY (id),
   CONSTRAINT markets_name_unique UNIQUE (name),
-  CONSTRAINT markets_slug_key UNIQUE (slug),
+  CONSTRAINT markets_slug_key UNIQUE (symbol),
   CONSTRAINT markets_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES markets (id) ON DELETE CASCADE
 );
 
@@ -31,5 +31,5 @@ CREATE INDEX IF NOT EXISTS idx_markets_market_type ON public.markets (market_typ
 -- Create index on is_active for filtering
 CREATE INDEX IF NOT EXISTS idx_markets_is_active ON public.markets (is_active);
 
--- Create index on slug for faster lookups
-CREATE INDEX IF NOT EXISTS idx_markets_slug ON public.markets (slug);
+-- Create index on symbol for faster lookups
+CREATE INDEX IF NOT EXISTS idx_markets_slug ON public.markets (symbol);

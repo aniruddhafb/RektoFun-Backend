@@ -17,7 +17,7 @@ class MarketType(str, Enum):
 class MarketCreate(BaseModel):
     """Schema for creating a market."""
     name: str = Field(min_length=1)
-    slug: str = Field(min_length=1)
+    symbol: str = Field(min_length=1)
     description: str | None = None
     image: str | None = None
     icon: str | None = None
@@ -31,7 +31,7 @@ class MarketCreate(BaseModel):
 class MarketUpdate(BaseModel):
     """Schema for updating a market."""
     name: str | None = None
-    slug: str | None = None
+    symbol: str | None = None
     description: str | None = None
     image: str | None = None
     icon: str | None = None
@@ -47,7 +47,7 @@ class MarketResponse(BaseModel):
     """Schema for market response."""
     id: str
     name: str
-    slug: str
+    symbol: str
     description: str | None
     image: str | None
     icon: str | None

@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS public.challenges (
     title text NOT NULL,
     description text,
     category text NOT NULL,
-    subcategory text,
     event_type text NOT NULL,
     ticker text,
     mode text,
