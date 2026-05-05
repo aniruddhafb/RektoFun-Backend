@@ -22,6 +22,7 @@ class MarketCreate(BaseModel):
     image: str | None = None
     icon: str | None = None
     parent_id: str | None = None
+    parent_name: str | None = None
     market_type: MarketType
     resolution_source: str | None = None
     config: dict | None = None
@@ -36,6 +37,7 @@ class MarketUpdate(BaseModel):
     image: str | None = None
     icon: str | None = None
     parent_id: str | None = None
+    parent_name: str | None = None
     market_type: MarketType | None = None
     resolution_source: str | None = None
     config: dict | None = None
@@ -52,6 +54,7 @@ class MarketResponse(BaseModel):
     image: str | None
     icon: str | None
     parent_id: str | None
+    parent_name: str | None
     market_type: str
     resolution_source: str | None
     config: dict | None

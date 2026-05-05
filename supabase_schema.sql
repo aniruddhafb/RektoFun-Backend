@@ -95,3 +95,37 @@ create trigger set_challenges_updated_at
 before update on public.challenges
 for each row
 execute function public.set_updated_at();
+
+create table if not exists public.markets (
+  id uuid not null default gen_random_uuid(),
+  name text not null,
+  symbol text not null,
+  description text null,
+  image text null,
+  icon text null,
+  parent_id uuid null,
+  parent_name text null,
+  market_type text not null,
+  resolution_source text null,
+  config jsonb null,
+  total_volume bigint null default 0,
+  is_active boolean null default true,
+  created_at timestamptz null default now(),
+  updated_at timestamptz null default now(),
+  constraint markets_pkey primary key (id),
+  constraint markets_name_unique unique (name),
+  constraint markets_slug_key unique (symbol),
+  constraint markets_parent_id_fkey foreign key (parent_id) references markets (id) on delete cascade
+);
+
+create index if not exists idx_markets_parent_id
+    on public.markets (parent_id);
+
+create index if not exists idx_markets_market_type
+    on public.markets (market_type);
+
+create index if not exists idx_markets_is_active
+    on public.markets (is_active);
+
+create index if not exists idx_markets_slug
+    on public.markets (symbol);

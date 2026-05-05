@@ -65,6 +65,7 @@ def get_markets(
     supabase: Annotated[Client, Depends(get_supabase)],
     market_type: str | None = None,
     parent_id: str | None = None,
+    parent_name: str | None = None,
     is_active: bool | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -73,7 +74,7 @@ def get_markets(
     Get a list of markets with optional filters.
 
     Example:
-        curl "http://localhost:8000/markets?market_type=binary&is_active=true&limit=10&offset=0"
+        curl "http://localhost:8000/markets?market_type=binary&parent_name=Sports&is_active=true&limit=10&offset=0"
     """
     query = supabase.table("markets").select("*")
 
@@ -84,6 +85,8 @@ def get_markets(
             query = query.is_("parent_id", "null")
         else:
             query = query.eq("parent_id", parent_id)
+    if parent_name is not None:
+        query = query.eq("parent_name", parent_name)
     if is_active is not None:
         query = query.eq("is_active", is_active)
 

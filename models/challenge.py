@@ -44,7 +44,7 @@ class Mode(str, Enum):
 class ChallengeCreate(BaseModel):
     title: str = Field(min_length=1)
     description: str | None = None
-    category: UUID = Field(description="Reference to markets table id")
+    category: str = Field(description="Reference to markets name")
     event_type: EventType
     ticker: str | None = None
     created_by: str | None = None
@@ -65,7 +65,7 @@ class ChallengeCreate(BaseModel):
 class ChallengeUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
-    category: UUID | None = None
+    category: str | None = None
     event_type: EventType | None = None
     ticker: str | None = None
     mode: Mode | None = None
@@ -92,7 +92,7 @@ class ChallengeResponse(BaseModel):
     id: str
     title: str
     description: str | None
-    category: UUID
+    category: str
     event_type: str
     ticker: str | None
     created_by: str | None
@@ -136,7 +136,7 @@ class EnrichedChallengeResponse(BaseModel):
     created_at: datetime | None
     total_challengers: int
     total_opponents: int
-    market: dict | None = Field(description="Market info: name, image, icon, parent_id")
+    market: dict | None = Field(description="Market info: name, image, icon, parent_id, parent_name")
     creator: dict | None = Field(description="Creator info: username, profile_image")
     opponent_info: dict | None = Field(description="First challenge_side data with SideKey = opponent")
 

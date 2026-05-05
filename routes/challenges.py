@@ -1,7 +1,7 @@
 """Challenge API endpoints."""
 
 from typing import Annotated
-from uuid import UUID
+ 
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from supabase import Client
@@ -24,10 +24,10 @@ router = APIRouter(prefix="/challenges", tags=["challenges"])
 
 def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
     # 1. Market Info
-    market_id = row.get("category")
+    market_name = row.get("category")
     market_info = None
-    if market_id:
-        market_res = supabase.table("markets").select("name, image, icon, parent_id").eq("id", market_id).single().execute()
+    if market_name:
+        market_res = supabase.table("markets").select("name, image, icon, parent_id, parent_name").eq("name", market_name).single().execute()
         market_info = market_res.data
 
     # 2. Creator Info
@@ -179,7 +179,7 @@ def create_challenge(
 def get_challenges(
     supabase: Annotated[Client, Depends(get_supabase)],
     status: ChallengeStatus | None = None,
-    category: UUID | None = None,
+    category: str | None = None,
     ticker: str | None = None,
     created_by: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,

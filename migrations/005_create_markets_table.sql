@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS public.markets (
   image text NULL,
   icon text NULL,
   parent_id uuid NULL,
+  parent_name text NULL,
   market_type text NOT NULL,
   resolution_source text NULL,
   config jsonb NULL,
