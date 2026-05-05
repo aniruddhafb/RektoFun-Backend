@@ -61,6 +61,7 @@ def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
         resolve_time=row.get("resolve_time"),
         resolved_at=row.get("resolved_at"),
         result=row.get("result"),
+        metadata=row.get("metadata"),
         created_at=row.get("created_at"),
         total_challengers=row["total_challengers"],
         total_opponents=row["total_opponents"],
@@ -221,11 +222,11 @@ def get_challenges(
     )
 
 
-@router.get("/{challenge_id}", response_model=ChallengeResponse)
+@router.get("/{challenge_id}", response_model=EnrichedChallengeResponse)
 def get_challenge_by_id(
     challenge_id: str,
     supabase: Annotated[Client, Depends(get_supabase)],
-) -> ChallengeResponse:
+) -> EnrichedChallengeResponse:
     """
     Get a challenge by its ID.
 
@@ -250,15 +251,15 @@ def get_challenge_by_id(
     if not rows:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    return coerce_challenge(rows[0])
+    return coerce_challenge(rows[0], supabase)
 
 
-@router.patch("/{challenge_id}", response_model=ChallengeResponse)
+@router.patch("/{challenge_id}", response_model=EnrichedChallengeResponse)
 def update_challenge(
     challenge_id: str,
     challenge_update: ChallengeUpdate,
     supabase: Annotated[Client, Depends(get_supabase)],
-) -> ChallengeResponse:
+) -> EnrichedChallengeResponse:
     """
     Update a challenge.
 
@@ -311,7 +312,7 @@ def update_challenge(
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to update challenge")
 
-    return coerce_challenge(result.data[0])
+    return coerce_challenge(result.data[0], supabase)
 
 
 @router.delete("/{challenge_id}", status_code=204, response_model=None)

@@ -133,6 +133,7 @@ class EnrichedChallengeResponse(BaseModel):
     resolve_time: datetime | None
     resolved_at: datetime | None
     result: dict | None
+    metadata: dict | None
     created_at: datetime | None
     total_challengers: int
     total_opponents: int
