@@ -137,6 +137,7 @@ class EnrichedChallengeResponse(BaseModel):
     min_bet: int
     total_pool: int
     status: str
+    resolution_status: str | None = None
     expire_time: datetime
     resolve_time: datetime | None
     resolved_at: datetime | None
