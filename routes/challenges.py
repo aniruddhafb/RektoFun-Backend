@@ -33,7 +33,7 @@ def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
     market_name = row.get("category")
     market_info = None
     if market_name:
-        market_res = supabase.table("markets").select("name, image, icon, parent_id, parent_name").eq("name", market_name).single().execute()
+        market_res = supabase.table("markets").select("name, image, icon, description, parent_id, parent_name").eq("name", market_name).single().execute()
         market_info = market_res.data
 
     # 2. Creator Info
@@ -64,6 +64,7 @@ def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
         min_bet=row["min_bet"],
         total_pool=row["total_pool"],
         status=row["status"],
+        resolution_status=row.get("resolution_status"),
         expire_time=row["expire_time"],
         resolve_time=row.get("resolve_time"),
         resolved_at=row.get("resolved_at"),
@@ -88,13 +89,13 @@ def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChalle
 
     markets_map: dict[str, dict] = {}
     users_map: dict[str, dict] = {}
-    opponent_by_challenge: dict[str, dict] = {}
+    participant_by_challenge: dict[str, dict] = {}
 
     if market_names:
         try:
             markets_res = (
                 supabase.table("markets")
-                .select("name, image, icon, parent_id, parent_name")
+                .select("name, image, icon, description, parent_id, parent_name")
                 .in_("name", market_names)
                 .execute()
             )
@@ -106,23 +107,22 @@ def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChalle
 
     if challenge_ids:
         try:
-            opponent_sides_res = (
+            sides_res = (
                 supabase.table("challenge_sides")
-                .select("challenge_id, user_id")
-                .eq("side_key", SideKey.OPPONENT.value)
+                .select("challenge_id, user_id, side_key")
                 .in_("challenge_id", challenge_ids)
                 .execute()
             )
-            opponent_sides = opponent_sides_res.data or []
-            opponent_ids = sorted({side.get("user_id") for side in opponent_sides if side.get("user_id")})
+            challenge_sides = sides_res.data or []
+            participant_ids = sorted({side.get("user_id") for side in challenge_sides if side.get("user_id")})
         except Exception:
-            opponent_sides = []
-            opponent_ids = []
+            challenge_sides = []
+            participant_ids = []
     else:
-        opponent_sides = []
-        opponent_ids = []
+        challenge_sides = []
+        participant_ids = []
 
-    user_ids = sorted(set(creator_ids + opponent_ids))
+    user_ids = sorted(set(creator_ids + participant_ids))
     if user_ids:
         try:
             users_res = (
@@ -141,11 +141,32 @@ def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChalle
         except Exception:
             users_map = {}
 
-    for side in opponent_sides:
-        challenge_id = side.get("challenge_id")
-        user_id = side.get("user_id")
-        if challenge_id and user_id and user_id in users_map and challenge_id not in opponent_by_challenge:
-            opponent_by_challenge[challenge_id] = users_map[user_id]
+    for row in rows:
+        challenge_id = row.get("id")
+        creator_id = row.get("created_by")
+        if not challenge_id:
+            continue
+
+        challenge_side_rows = [
+            side for side in challenge_sides
+            if side.get("challenge_id") == challenge_id and side.get("user_id")
+        ]
+
+        preferred_side = next(
+            (side for side in challenge_side_rows if side.get("side_key") == SideKey.OPPONENT.value),
+            None,
+        )
+
+        fallback_side = next(
+            (side for side in challenge_side_rows if side.get("user_id") != creator_id),
+            None,
+        )
+
+        picked_side = preferred_side or fallback_side
+        picked_user_id = picked_side.get("user_id") if picked_side else None
+
+        if challenge_id and picked_user_id and picked_user_id in users_map:
+            participant_by_challenge[challenge_id] = users_map[picked_user_id]
 
     enriched: list[EnrichedChallengeResponse] = []
     for row in rows:
@@ -162,6 +183,7 @@ def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChalle
                 min_bet=row.get("min_bet") or 1,
                 total_pool=row.get("total_pool") or 0,
                 status=row.get("status") or ChallengeStatus.open.value,
+                resolution_status=row.get("resolution_status"),
                 expire_time=row["expire_time"],
                 resolve_time=row.get("resolve_time"),
                 resolved_at=row.get("resolved_at"),
@@ -172,7 +194,7 @@ def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChalle
                 total_opponents=row.get("total_opponents") or 0,
                 market=markets_map.get(row.get("category")),
                 creator=users_map.get(creator_id) if creator_id else None,
-                opponent_info=opponent_by_challenge.get(row["id"]),
+                opponent_info=participant_by_challenge.get(row["id"]),
             )
         )
     return enriched
@@ -577,3 +599,6 @@ def join_challenge(
         raise HTTPException(status_code=500, detail="Failed to insert position")
 
     return {"status": "ok"}
+
+
+
