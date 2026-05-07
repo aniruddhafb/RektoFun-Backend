@@ -8,13 +8,26 @@ from supabase import Client
 
 from config import get_supabase
 from models.user import UserCreate, UserListResponse, UserResponse, UserUpdate
-from utils import serialize_payload
-
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 def coerce_user(row: dict) -> UserResponse:
     return UserResponse.model_validate(row)
+
+
+def find_user_by_wallet(
+    supabase: Client,
+    wallet_address: str,
+) -> dict | None:
+    result = (
+        supabase.table("users")
+        .select("*")
+        .eq("wallet_address", wallet_address)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
 
 
 @router.post("", response_model=UserResponse, status_code=201)
@@ -36,17 +49,10 @@ def create_user(
             "login_type": "wallet"
           }'
     """
-    # Check if user with this wallet_address already exists
     try:
-        existing_user = (
-            supabase.table("users")
-            .select("*")
-            .eq("wallet_address", user.wallet_address)
-            .limit(1)
-            .execute()
-        )
-        if existing_user.data:
-            return coerce_user(existing_user.data[0])
+        existing_user = find_user_by_wallet(supabase, user.wallet_address)
+        if existing_user:
+            return coerce_user(existing_user)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -90,6 +96,58 @@ def create_user(
 
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to create user")
+
+    return coerce_user(result.data[0])
+
+
+@router.post("/wallet/{wallet_address}/ensure", response_model=UserResponse)
+def ensure_user_by_wallet(
+    wallet_address: str,
+    supabase: Annotated[Client, Depends(get_supabase)],
+    body: Annotated[dict | None, Body()] = None,
+) -> UserResponse:
+    """
+    Ensure a user exists for a wallet address and return that user.
+    This is optimized for navbar/session bootstrap to avoid create+fetch chains.
+    """
+    payload = body or {}
+    login_type = payload.get("login_type", "wallet")
+    username = payload.get("username") or f"user-{wallet_address[:8]}"
+    description = payload.get("description")
+    profile_image = payload.get("profile_image")
+
+    try:
+        existing_user = find_user_by_wallet(supabase, wallet_address)
+        if existing_user:
+            return coerce_user(existing_user)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check existing user: {exc}",
+        ) from exc
+
+    try:
+        result = (
+            supabase.table("users")
+            .insert(
+                {
+                    "wallet_address": wallet_address,
+                    "username": username,
+                    "description": description,
+                    "profile_image": profile_image,
+                    "login_type": login_type,
+                }
+            )
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create user: {exc}",
+        ) from exc
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to ensure user")
 
     return coerce_user(result.data[0])
 
@@ -237,24 +295,17 @@ def get_user_by_wallet(
         curl http://localhost:8000/users/wallet/7YkS7x...example
     """
     try:
-        result = (
-            supabase.table("users")
-            .select("*")
-            .eq("wallet_address", wallet_address)
-            .limit(1)
-            .execute()
-        )
+        row = find_user_by_wallet(supabase, wallet_address)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch user: {exc}",
         ) from exc
 
-    rows = result.data or []
-    if not rows:
+    if not row:
         raise HTTPException(status_code=404, detail="User not found")
 
-    return coerce_user(rows[0])
+    return coerce_user(row)
 
 
 @router.patch("/{user_id}", response_model=UserResponse)

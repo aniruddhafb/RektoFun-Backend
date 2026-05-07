@@ -1,5 +1,6 @@
 """Challenge API endpoints."""
 
+from enum import Enum
 from typing import Annotated
  
 
@@ -20,6 +21,11 @@ from models.challenge_side import SideKey
 from utils import serialize_payload
 
 router = APIRouter(prefix="/challenges", tags=["challenges"])
+
+
+class ChallengeSort(str, Enum):
+    latest = "latest"
+    expiring_soon = "expiring_soon"
 
 
 def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
@@ -70,6 +76,106 @@ def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
         creator=creator_info,
         opponent_info=opponent_info
     )
+
+
+def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChallengeResponse]:
+    if not rows:
+        return []
+
+    market_names = sorted({row.get("category") for row in rows if row.get("category")})
+    creator_ids = sorted({row.get("created_by") for row in rows if row.get("created_by")})
+    challenge_ids = [row["id"] for row in rows if row.get("id")]
+
+    markets_map: dict[str, dict] = {}
+    users_map: dict[str, dict] = {}
+    opponent_by_challenge: dict[str, dict] = {}
+
+    if market_names:
+        try:
+            markets_res = (
+                supabase.table("markets")
+                .select("name, image, icon, parent_id, parent_name")
+                .in_("name", market_names)
+                .execute()
+            )
+            for market in markets_res.data or []:
+                if market.get("name"):
+                    markets_map[market["name"]] = market
+        except Exception:
+            markets_map = {}
+
+    if challenge_ids:
+        try:
+            opponent_sides_res = (
+                supabase.table("challenge_sides")
+                .select("challenge_id, user_id")
+                .eq("side_key", SideKey.OPPONENT.value)
+                .in_("challenge_id", challenge_ids)
+                .execute()
+            )
+            opponent_sides = opponent_sides_res.data or []
+            opponent_ids = sorted({side.get("user_id") for side in opponent_sides if side.get("user_id")})
+        except Exception:
+            opponent_sides = []
+            opponent_ids = []
+    else:
+        opponent_sides = []
+        opponent_ids = []
+
+    user_ids = sorted(set(creator_ids + opponent_ids))
+    if user_ids:
+        try:
+            users_res = (
+                supabase.table("users")
+                .select("id, username, profile_image, wallet_address")
+                .in_("id", user_ids)
+                .execute()
+            )
+            for user in users_res.data or []:
+                if user.get("id"):
+                    users_map[user["id"]] = {
+                        "username": user.get("username"),
+                        "profile_image": user.get("profile_image"),
+                        "wallet_address": user.get("wallet_address"),
+                    }
+        except Exception:
+            users_map = {}
+
+    for side in opponent_sides:
+        challenge_id = side.get("challenge_id")
+        user_id = side.get("user_id")
+        if challenge_id and user_id and user_id in users_map and challenge_id not in opponent_by_challenge:
+            opponent_by_challenge[challenge_id] = users_map[user_id]
+
+    enriched: list[EnrichedChallengeResponse] = []
+    for row in rows:
+        creator_id = row.get("created_by")
+        enriched.append(
+            EnrichedChallengeResponse(
+                id=row["id"],
+                title=row["title"],
+                mode=row["mode"],
+                initial_bet=row.get("initial_bet") or 0,
+                target_price=row.get("target_price"),
+                min_accept_bet=row.get("min_accept_bet"),
+                max_accept_bet=row.get("max_accept_bet"),
+                min_bet=row.get("min_bet") or 1,
+                total_pool=row.get("total_pool") or 0,
+                status=row.get("status") or ChallengeStatus.open.value,
+                expire_time=row["expire_time"],
+                resolve_time=row.get("resolve_time"),
+                resolved_at=row.get("resolved_at"),
+                result=row.get("result"),
+                metadata=row.get("metadata"),
+                created_at=row.get("created_at"),
+                total_challengers=row.get("total_challengers") or 0,
+                total_opponents=row.get("total_opponents") or 0,
+                market=markets_map.get(row.get("category")),
+                creator=users_map.get(creator_id) if creator_id else None,
+                opponent_info=opponent_by_challenge.get(row["id"]),
+            )
+        )
+    return enriched
 
 
 @router.post("", status_code=201)
@@ -186,6 +292,8 @@ def get_challenges(
     category: str | None = None,
     ticker: str | None = None,
     created_by: str | None = None,
+    search: str | None = None,
+    sort: Annotated[str, Query(pattern="^(latest|expiring_soon)$")] = "latest",
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ChallengeListResponse:
@@ -195,7 +303,7 @@ def get_challenges(
     Example:
         curl "http://localhost:8000/challenges?status=open&category=123e4567-e89b-12d3-a456-426614174000&ticker=BTC&limit=10&offset=0"
     """
-    query = supabase.table("challenges").select("*")
+    query = supabase.table("challenges").select("*", count="exact")
  
     if status is not None:
         query = query.eq("status", status.value)
@@ -205,10 +313,13 @@ def get_challenges(
         query = query.eq("ticker", ticker)
     if created_by:
         query = query.eq("created_by", created_by)
+    if search:
+        query = query.ilike("title", f"%{search}%")
  
     try:
+        order_column = "expire_time" if sort == ChallengeSort.expiring_soon else "created_at"
         result = (
-            query.order("created_at", desc=True)
+            query.order(order_column, desc=False if sort == ChallengeSort.expiring_soon else True)
             .range(offset, offset + limit - 1)
             .execute()
         )
@@ -219,10 +330,8 @@ def get_challenges(
         ) from exc
  
     rows = result.data or []
-    return ChallengeListResponse(
-        challenges=[coerce_challenge(row, supabase) for row in rows],
-        count=len(rows),
-    )
+    total_count = result.count if result.count is not None else len(rows)
+    return ChallengeListResponse(challenges=enrich_challenges(rows, supabase), count=total_count)
 
 
 @router.get("/{challenge_id}", response_model=EnrichedChallengeResponse)
@@ -254,7 +363,7 @@ def get_challenge_by_id(
     if not rows:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    return coerce_challenge(rows[0], supabase)
+    return enrich_challenges(rows, supabase)[0]
 
 
 @router.patch("/{challenge_id}", response_model=EnrichedChallengeResponse)
@@ -315,7 +424,7 @@ def update_challenge(
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to update challenge")
 
-    return coerce_challenge(result.data[0], supabase)
+    return enrich_challenges([result.data[0]], supabase)[0]
 
 
 @router.delete("/{challenge_id}", status_code=204, response_model=None)
