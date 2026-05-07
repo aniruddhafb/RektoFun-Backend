@@ -37,7 +37,14 @@ class Settings(BaseModel):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # Always include local frontend/dev origins to avoid accidental lockout via env overrides.
+    required_dev_origins = {
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    }
+    settings.cors_origins = sorted(set(settings.cors_origins).union(required_dev_origins))
+    return settings
 
 
 @lru_cache
