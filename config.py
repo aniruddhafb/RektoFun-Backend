@@ -28,7 +28,7 @@ class Settings(BaseModel):
             origin.strip()
             for origin in os.getenv(
                 "CORS_ORIGINS",
-                "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:8000,https://rekto.fun,https://www.rekto.fun/",
+                "*",
             ).split(",")
             if origin.strip()
         ]
@@ -51,6 +51,10 @@ class Settings(BaseModel):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    if "*" in settings.cors_origins:
+        settings.cors_origins = ["*"]
+        return settings
+
     # Always include local frontend/dev origins to avoid accidental lockout via env overrides.
     required_dev_origins = {
         "http://localhost:3000",
