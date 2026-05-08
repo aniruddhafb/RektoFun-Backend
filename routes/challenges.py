@@ -74,6 +74,7 @@ def coerce_challenge(row: dict, supabase: Client) -> EnrichedChallengeResponse:
         total_pool=row["total_pool"],
         status=row["status"],
         resolution_status=row.get("resolution_status"),
+        resolution_source=row.get("resolution_source"),
         expire_time=row["expire_time"],
         resolve_time=row.get("resolve_time"),
         resolved_at=row.get("resolved_at"),
@@ -194,6 +195,7 @@ def enrich_challenges(rows: list[dict], supabase: Client) -> list[EnrichedChalle
                 total_pool=row.get("total_pool") or 0,
                 status=row.get("status") or ChallengeStatus.open.value,
                 resolution_status=row.get("resolution_status"),
+                resolution_source=row.get("resolution_source"),
                 expire_time=row["expire_time"],
                 resolve_time=row.get("resolve_time"),
                 resolved_at=row.get("resolved_at"),
@@ -242,6 +244,7 @@ def create_challenge(
     payload = serialize_payload({
         **challenge.model_dump(),
         "target_price": target_price if target_price is not None else challenge.target_price,
+        "min_accept_bet": challenge.min_accept_bet if challenge.min_accept_bet is not None else challenge.initial_bet,
         "status": ChallengeStatus.open.value,
         "resolution_status": "pending",
         "resolution_mode": "at_time",
@@ -658,6 +661,7 @@ def join_challenge(
         raise HTTPException(status_code=500, detail="Failed to insert position")
 
     return {"status": "ok"}
+
 
 
 

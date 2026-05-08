@@ -18,6 +18,7 @@ from models.clan import (
 )
 
 router = APIRouter(prefix="/clans", tags=["clans"])
+MAX_CLANS_PER_USER = 5
 
 
 class ClanMemberInfo(BaseModel):
@@ -49,6 +50,7 @@ def get_clans(
     supabase: Annotated[Client, Depends(get_supabase)],
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
     offset: Annotated[int, Query(ge=0)] = 0,
+    leader_id: str | None = Query(None, description="Filter clans by leader user ID"),
 ) -> PaginatedClansResponse:
     """
     Get all clans with pagination.
@@ -58,17 +60,18 @@ def get_clans(
     """
     try:
         # Get total count
-        count_result = (
-            supabase.table("clans")
-            .select("*", count="exact")
-            .execute()
-        )
+        count_query = supabase.table("clans").select("*", count="exact")
+        if leader_id:
+            count_query = count_query.eq("clan_leader", leader_id)
+        count_result = count_query.execute()
         total = count_result.count or 0
 
         # Get paginated clans
+        clans_query = supabase.table("clans").select("*")
+        if leader_id:
+            clans_query = clans_query.eq("clan_leader", leader_id)
         result = (
-            supabase.table("clans")
-            .select("*")
+            clans_query
             .order("created_at", desc=True)
             .range(offset, offset + limit - 1)
             .execute()
@@ -168,6 +171,27 @@ def create_clan(
             "clan_leader": "user-uuid-here"
           }'
     """
+    # Enforce one clan per leader
+    try:
+        existing_clan = (
+            supabase.table("clans")
+            .select("id")
+            .eq("clan_leader", clan_data.clan_leader)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to validate clan leader: {str(exc)}",
+        ) from exc
+
+    if existing_clan.data:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have created one clan",
+        )
+
     # Insert the clan into the database
     try:
         result = (
@@ -546,6 +570,27 @@ def join_clan(
     # Check if user is already a member
     if user_id in current_members:
         raise HTTPException(status_code=400, detail="User is already a member of this clan")
+
+    # Enforce max clans per user membership
+    try:
+        user_clans_result = (
+            supabase.table("clans")
+            .select("id")
+            .contains("clan_members", [user_id])
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to validate user clan memberships: {str(exc)}",
+        ) from exc
+
+    user_clans_count = len(user_clans_result.data or [])
+    if user_clans_count >= MAX_CLANS_PER_USER:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You can be in maximum {MAX_CLANS_PER_USER} clans at a time",
+        )
 
     # Add user to clan_members
     updated_members = current_members + [user_id]
