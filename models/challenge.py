@@ -57,7 +57,7 @@ class ChallengeCreate(BaseModel):
     min_bet: int = Field(default=1, ge=1)
     bet_unit: int = Field(default=1, ge=1)
     expire_time: datetime
-    resolve_time: datetime | None = None
+    resolve_time: datetime
     resolution_source: str | None = None
     resolution_config: dict = Field(default_factory=dict)
     result: dict | None = None

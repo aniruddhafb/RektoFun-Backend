@@ -23,7 +23,12 @@ from utils import serialize_payload
 from routes.transform import transform as _transform, TransformRequest
 from config import get_settings
 from services.challenge_ai import validate_and_transform_statement
+from services.scheduler_registry import get_scheduler
+
 router = APIRouter(prefix="/challenges", tags=["challenges"])
+
+# Parent market name for crypto — child markets (BTC, ETH, SOL, etc.) have parent_name = "crypto"
+_CRYPTO_PARENT_NAME = "crypto"
 
 
 class ChallengeSort(str, Enum):
@@ -234,34 +239,6 @@ def create_challenge(
           }'
     """
 
-    # AI_VALIDATED_CATEGORIES = {
-    #     "ipl",
-    #     "fifa",
-    # }
-
-    # if challenge.category.lower() in AI_VALIDATED_CATEGORIES:
-
-    #     settings = get_settings()
-
-    #     validation = validate_and_transform_statement(
-    #         category=challenge.category,
-    #         statement=challenge.title,
-    #         api_key=settings.openai_api_key,
-    #     )
-
-    #     if validation["status"] != "ok":
-    #         raise HTTPException(
-    #             status_code=400,
-    #             detail={
-    #                 "message": "Invalid challenge title",
-    #                 "status": validation["status"],
-    #                 "suggestions": validation["statements"],
-    #             },
-    #         )
-
-    #     # normalize title automatically
-    #     challenge.title = validation["statements"][0]
-
     payload = serialize_payload({
         **challenge.model_dump(),
         "target_price": target_price if target_price is not None else challenge.target_price,
@@ -339,7 +316,54 @@ def create_challenge(
                 detail=f"Failed to insert position: {exc}",
             ) from exc
 
+    # Schedule timed resolution for crypto challenges only (at resolve_time)
+    _maybe_schedule_resolution(challenge_id, challenge.category, challenge.resolve_time, supabase)
+
     return {"status": "ok"}
+
+
+def _maybe_schedule_resolution(
+    challenge_id: str,
+    category: str,
+    resolve_time,
+    supabase: Client,
+) -> None:
+    """
+    Schedule a resolution job if the challenge belongs to a crypto child market.
+
+    Markets follow a parent-child hierarchy:
+      - Parent market: name="crypto", parent_id=NULL
+      - Child markets: name="Bitcoin"/"Ethereum"/etc., parent_name="crypto"
+
+    A challenge is auto-resolved only when its market's parent_name == "crypto".
+    Silently skips if the scheduler is not available or the market is not a crypto child.
+    """
+    scheduler = get_scheduler()
+    if scheduler is None:
+        return
+
+    try:
+        market_res = (
+            supabase.table("markets")
+            .select("parent_name")
+            .eq("name", category)
+            .limit(1)
+            .execute()
+        )
+        market_rows = market_res.data or []
+        if not market_rows:
+            return
+        parent_name = (market_rows[0].get("parent_name") or "").lower()
+        if parent_name != _CRYPTO_PARENT_NAME:
+            return
+    except Exception as exc:
+        print(f"[Scheduler] Could not check market parent for category '{category}': {exc}")
+        return
+
+    if resolve_time is None:
+        return
+
+    scheduler.schedule_challenge(challenge_id, resolve_time)
 
 
 @router.get("", response_model=ChallengeListResponse)
