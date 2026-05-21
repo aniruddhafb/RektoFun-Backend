@@ -31,9 +31,19 @@ class UserResponse(BaseModel):
     referral_code: str | None
     referred_by: str | None
     referrals: list[str]
+    followers: list[str] = []
+    following: list[str] = []
     created_at: datetime | None
     updated_at: datetime | None
     earnings: float | None
+
+
+class FollowActionRequest(BaseModel):
+    follower_wallet_address: str = Field(min_length=1)
+
+
+class FollowStatusResponse(BaseModel):
+    is_following: bool
 
 
 class UserListResponse(BaseModel):

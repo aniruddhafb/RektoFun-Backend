@@ -7,7 +7,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from supabase import Client
 
 from config import get_supabase
-from models.user import UserCreate, UserListResponse, UserResponse, UserUpdate
+from models.user import (
+    FollowActionRequest,
+    FollowStatusResponse,
+    UserCreate,
+    UserListResponse,
+    UserResponse,
+    UserUpdate,
+)
 router = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -30,6 +37,10 @@ def find_user_by_wallet(
     return rows[0] if rows else None
 
 
+def normalize_wallet(wallet_address: str) -> str:
+    return wallet_address.strip()
+
+
 @router.post("", response_model=UserResponse, status_code=201)
 def create_user(
     user: UserCreate,
@@ -50,7 +61,8 @@ def create_user(
           }'
     """
     try:
-        existing_user = find_user_by_wallet(supabase, user.wallet_address)
+        wallet_address = normalize_wallet(user.wallet_address)
+        existing_user = find_user_by_wallet(supabase, wallet_address)
         if existing_user:
             return coerce_user(existing_user)
     except Exception as exc:
@@ -60,11 +72,13 @@ def create_user(
         ) from exc
 
     payload = {
-        "wallet_address": user.wallet_address,
+        "wallet_address": wallet_address,
         "username": user.username,
         "description": user.description,
         "profile_image": user.profile_image,
         "login_type": user.login_type,
+        "followers": [],
+        "following": [],
     }
 
     # If referral code is provided, find the referrer
@@ -110,6 +124,7 @@ def ensure_user_by_wallet(
     Ensure a user exists for a wallet address and return that user.
     This is optimized for navbar/session bootstrap to avoid create+fetch chains.
     """
+    wallet_address = normalize_wallet(wallet_address)
     payload = body or {}
     login_type = payload.get("login_type", "wallet")
     username = payload.get("username") or f"user-{wallet_address[:8]}"
@@ -136,6 +151,8 @@ def ensure_user_by_wallet(
                     "description": description,
                     "profile_image": profile_image,
                     "login_type": login_type,
+                    "followers": [],
+                    "following": [],
                 }
             )
             .execute()
@@ -295,7 +312,7 @@ def get_user_by_wallet(
         curl http://localhost:8000/users/wallet/7YkS7x...example
     """
     try:
-        row = find_user_by_wallet(supabase, wallet_address)
+        row = find_user_by_wallet(supabase, normalize_wallet(wallet_address))
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -306,6 +323,117 @@ def get_user_by_wallet(
         raise HTTPException(status_code=404, detail="User not found")
 
     return coerce_user(row)
+
+
+@router.get("/wallet/{wallet_address}/follow-status", response_model=FollowStatusResponse)
+def get_follow_status(
+    wallet_address: str,
+    follower_wallet_address: str,
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> FollowStatusResponse:
+    target_wallet = normalize_wallet(wallet_address)
+    follower_wallet = normalize_wallet(follower_wallet_address)
+
+    target_user = find_user_by_wallet(supabase, target_wallet)
+    follower_user = find_user_by_wallet(supabase, follower_wallet)
+
+    if not target_user or not follower_user:
+        return FollowStatusResponse(is_following=False)
+
+    follower_id = str(follower_user["id"])
+    followers = target_user.get("followers") or []
+    return FollowStatusResponse(is_following=follower_id in followers)
+
+
+@router.post("/wallet/{wallet_address}/follow", response_model=UserResponse)
+def follow_user(
+    wallet_address: str,
+    body: FollowActionRequest,
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> UserResponse:
+    target_wallet = normalize_wallet(wallet_address)
+    follower_wallet = normalize_wallet(body.follower_wallet_address)
+
+    if target_wallet == follower_wallet:
+        raise HTTPException(status_code=400, detail="You cannot follow yourself")
+
+    target_user = find_user_by_wallet(supabase, target_wallet)
+    follower_user = find_user_by_wallet(supabase, follower_wallet)
+
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+    if not follower_user:
+        raise HTTPException(status_code=404, detail="Follower user not found")
+
+    target_id = str(target_user["id"])
+    follower_id = str(follower_user["id"])
+
+    target_followers = target_user.get("followers") or []
+    follower_following = follower_user.get("following") or []
+
+    if follower_id not in target_followers:
+        target_followers = [*target_followers, follower_id]
+    if target_id not in follower_following:
+        follower_following = [*follower_following, target_id]
+
+    try:
+        target_update = (
+            supabase.table("users")
+            .update({"followers": target_followers})
+            .eq("id", target_id)
+            .execute()
+        )
+        supabase.table("users").update({"following": follower_following}).eq("id", follower_id).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to follow user: {exc}") from exc
+
+    if not target_update.data:
+        raise HTTPException(status_code=500, detail="Failed to follow user")
+
+    return coerce_user(target_update.data[0])
+
+
+@router.post("/wallet/{wallet_address}/unfollow", response_model=UserResponse)
+def unfollow_user(
+    wallet_address: str,
+    body: FollowActionRequest,
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> UserResponse:
+    target_wallet = normalize_wallet(wallet_address)
+    follower_wallet = normalize_wallet(body.follower_wallet_address)
+
+    if target_wallet == follower_wallet:
+        raise HTTPException(status_code=400, detail="You cannot unfollow yourself")
+
+    target_user = find_user_by_wallet(supabase, target_wallet)
+    follower_user = find_user_by_wallet(supabase, follower_wallet)
+
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+    if not follower_user:
+        raise HTTPException(status_code=404, detail="Follower user not found")
+
+    target_id = str(target_user["id"])
+    follower_id = str(follower_user["id"])
+
+    target_followers = [uid for uid in (target_user.get("followers") or []) if uid != follower_id]
+    follower_following = [uid for uid in (follower_user.get("following") or []) if uid != target_id]
+
+    try:
+        target_update = (
+            supabase.table("users")
+            .update({"followers": target_followers})
+            .eq("id", target_id)
+            .execute()
+        )
+        supabase.table("users").update({"following": follower_following}).eq("id", follower_id).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to unfollow user: {exc}") from exc
+
+    if not target_update.data:
+        raise HTTPException(status_code=500, detail="Failed to unfollow user")
+
+    return coerce_user(target_update.data[0])
 
 
 @router.patch("/{user_id}", response_model=UserResponse)

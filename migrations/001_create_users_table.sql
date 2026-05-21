@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS public.users (
     referral_code TEXT NULL DEFAULT substring(md5((random())::TEXT), 1, 8),
     referred_by UUID NULL,
     referrals TEXT[] NULL DEFAULT '{}'::TEXT[],
+    followers TEXT[] NULL DEFAULT '{}'::TEXT[],
+    following TEXT[] NULL DEFAULT '{}'::TEXT[],
     created_at TIMESTAMP WITH TIME ZONE NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NULL DEFAULT NOW(),
     earnings NUMERIC NULL DEFAULT 0,
