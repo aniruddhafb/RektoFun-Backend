@@ -18,7 +18,7 @@ async def send_otp_email(to_email: str, otp: str):
             msg = MIMEMultipart()
             msg['From'] = settings.email_from or settings.smtp_user
             msg['To'] = to_email
-            msg['Subject'] = "Verify your Rekto Beta Access"
+            msg['Subject'] = "Verify Your Rekto Beta Access"
 
             body = f"Your verification code for Rekto Beta is: {otp}\n\nThis code will expire in 10 minutes."
             msg.attach(MIMEText(body, 'plain'))
