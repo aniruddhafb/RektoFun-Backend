@@ -43,6 +43,13 @@ class Settings(BaseModel):
     )
     birdeye_chart_type: str = Field(default_factory=lambda: os.getenv("BIRDEYE_CHART_TYPE", "1m").strip())
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
+    
+    # Email configuration
+    smtp_server: str = Field(default_factory=lambda: os.getenv("SMTP_SERVER", "smtp.gmail.com").strip())
+    smtp_port: int = Field(default_factory=lambda: int(os.getenv("SMTP_PORT", "587")))
+    smtp_user: str = Field(default_factory=lambda: os.getenv("SMTP_USER", "").strip())
+    smtp_password: str = Field(default_factory=lambda: os.getenv("SMTP_PASSWORD", "").strip())
+    email_from: str = Field(default_factory=lambda: os.getenv("EMAIL_FROM", "").strip())
 
 
 @lru_cache

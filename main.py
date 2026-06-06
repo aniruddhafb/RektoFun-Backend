@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings, get_supabase_client
-from routes import challenge_sides, challenges, challenge_outcomes, health, markets, positions, users, clans, transform
+from routes import challenge_sides, challenges, challenge_outcomes, health, markets, positions, users, clans, transform, email_subscription
 from services.birdeye_price_logger import BirdeyePriceLogger
 from services.challenge_scheduler import ChallengeScheduler
 from services.scheduler_registry import set_scheduler
@@ -55,3 +55,4 @@ app.include_router(challenge_sides.router)
 app.include_router(positions.router)
 app.include_router(markets.router)
 app.include_router(clans.router)
+app.include_router(email_subscription.router)
