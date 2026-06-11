@@ -1,0 +1,103 @@
+"""
+Supabase database service for RektoFun Backend API
+
+Provides database client initialization and connection management.
+"""
+
+from typing import Optional
+
+from supabase import Client, create_client
+
+from config import settings
+
+
+class DatabaseService:
+    """Service for managing Supabase database connections"""
+
+    _instance: Optional["DatabaseService"] = None
+    _client: Optional[Client] = None
+
+    def __new__(cls) -> "DatabaseService":
+        """Singleton pattern to ensure single database service instance"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def initialize(self) -> Client:
+        """
+        Initialize and return the Supabase client.
+
+        Returns:
+            Client: Configured Supabase client instance
+
+        Raises:
+            ValueError: If Supabase configuration is missing
+            RuntimeError: If client initialization fails
+        """
+        if not settings.is_configured:
+            raise ValueError(
+                "Supabase configuration missing. Please set SUPABASE_URL and SUPABASE_KEY environment variables."
+            )
+
+        try:
+            if self._client is None:
+                self._client = create_client(
+                    settings.supabase_url,
+                    settings.supabase_key
+                )
+            return self._client
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize Supabase client: {str(e)}") from e
+
+    @property
+    def client(self) -> Client:
+        """
+        Get the Supabase client instance.
+
+        Returns:
+            Client: The Supabase client instance
+
+        Raises:
+            RuntimeError: If client has not been initialized
+        """
+        if self._client is None:
+            raise RuntimeError(
+                "Database client not initialized. Call initialize() first."
+            )
+        return self._client
+
+    def get_client(self) -> Client:
+        """
+        Get the Supabase client, initializing if necessary.
+
+        Returns:
+            Client: The Supabase client instance
+        """
+        if self._client is None:
+            return self.initialize()
+        return self._client
+
+    def is_connected(self) -> bool:
+        """Check if the database client is initialized and connected"""
+        return self._client is not None
+
+    async def close(self) -> None:
+        """Close the database connection and cleanup resources"""
+        if self._client:
+            # Supabase client handles connection pooling automatically
+            self._client = None
+            DatabaseService._instance = None
+
+
+# Global database service instance
+db_service = DatabaseService()
+
+
+def get_db_client() -> Client:
+    """
+    Dependency function to get the database client.
+
+    Returns:
+        Client: The Supabase client instance
+    """
+    return db_service.get_client()
