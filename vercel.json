@@ -29,7 +29,7 @@
     "rewrites": [
         {
             "source": "/(.*)",
-            "destination": "/main.py"
+            "destination": "/api/main.py"
         }
     ]
 }
