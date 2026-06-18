@@ -137,6 +137,17 @@ app.include_router(email_subscription.router)
 # app.include_router(transactions.router, prefix="/api/v1/transactions", tags=["transactions"])
 
 
+# Import Mangum for serverless deployment (Vercel)
+try:
+    from mangum import Mangum
+    # Create handler for serverless deployment
+    handler = Mangum(app, lifespan="off")
+    logger.info("Mangum handler created for serverless deployment")
+except ImportError:
+    handler = None
+    logger.info("Mangum not installed, running in traditional mode")
+
+
 if __name__ == "__main__":
     import uvicorn
     
