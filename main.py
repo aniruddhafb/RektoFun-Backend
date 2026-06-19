@@ -12,7 +12,7 @@ from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from config import settings
+from config import get_settings
 from services.database import db_service, get_db_client
 from services.challenge_monitor_service import (
     start_challenge_monitor,
@@ -41,7 +41,8 @@ async def lifespan(app: FastAPI):
         logger.info("Supabase database connection established successfully")
     except Exception as e:
         logger.error(f"Failed to initialize Supabase connection: {e}")
-        raise
+        logger.warning("Continuing without database - API will return errors for DB operations")
+        # Don't raise - continue without database
     
     # Startup: Initialize challenge monitor
     logger.info("Starting challenge monitor service...")
@@ -70,15 +71,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title=settings.app_name,
-    version=settings.app_version,
+    title=get_settings().app_name,
+    version=get_settings().app_version,
     lifespan=lifespan
 )
 
 # Configure CORS
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=_settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -92,8 +94,9 @@ async def handle_options(request: Request, path: str):
     Handle CORS preflight requests for all routes.
     This ensures OPTIONS requests return a 200 OK response.
     """
+    _settings = get_settings()
     origin = request.headers.get("origin", "")
-    if origin in settings.cors_origins:
+    if origin in _settings.cors_origins:
         headers = {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
@@ -112,7 +115,7 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "version": settings.app_version,
+        "version": get_settings().app_version,
         "database_connected": db_service.is_connected()
     }
 
@@ -134,6 +137,17 @@ app.include_router(email_subscription.router)
 # app.include_router(transactions.router, prefix="/api/v1/transactions", tags=["transactions"])
 
 
+# Import Mangum for serverless deployment (Vercel)
+try:
+    from mangum import Mangum
+    # Create handler for serverless deployment
+    handler = Mangum(app, lifespan="off")
+    logger.info("Mangum handler created for serverless deployment")
+except ImportError:
+    handler = None
+    logger.info("Mangum not installed, running in traditional mode")
+
+
 if __name__ == "__main__":
     import uvicorn
     
@@ -141,5 +155,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=settings.debug
+        reload=get_settings().debug
     )

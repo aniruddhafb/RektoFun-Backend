@@ -8,7 +8,7 @@ from typing import Optional
 
 from supabase import Client, create_client
 
-from config import settings
+from config import get_settings
 
 
 class DatabaseService:
@@ -23,21 +23,24 @@ class DatabaseService:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def initialize(self) -> Client:
+    def initialize(self) -> Optional[Client]:
         """
         Initialize and return the Supabase client.
 
         Returns:
-            Client: Configured Supabase client instance
+            Client: Configured Supabase client instance, or None if not configured
 
         Raises:
-            ValueError: If Supabase configuration is missing
             RuntimeError: If client initialization fails
         """
+        settings = get_settings()
+        
         if not settings.is_configured:
-            raise ValueError(
-                "Supabase configuration missing. Please set SUPABASE_URL and SUPABASE_KEY environment variables."
+            import logging
+            logging.getLogger(__name__).warning(
+                "Supabase configuration missing. Database features will be disabled."
             )
+            return None
 
         try:
             if self._client is None:

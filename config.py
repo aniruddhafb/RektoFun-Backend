@@ -81,10 +81,6 @@ def get_settings() -> Settings:
     return settings
 
 
-# Global settings instance for backward compatibility
-settings = get_settings()
-
-
 @lru_cache
 def get_supabase_client() -> Client:
     settings = get_settings()
