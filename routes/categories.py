@@ -34,6 +34,14 @@ async def get_child_categories(parent_category: str):
     return categories
 
 
+@router.get("/parent-categories", response_model=list[CategoryResponse])
+async def get_parent_categories():
+    """Get all parent categories (categories with null parent_category)"""
+    service = get_category_service()
+    categories = service.get_parent_categories()
+    return categories
+
+
 @router.get("/{category_id}", response_model=CategoryResponse)
 async def get_category(category_id: int):
     """Get a category by ID"""

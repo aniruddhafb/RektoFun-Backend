@@ -70,6 +70,7 @@ def get_settings() -> Settings:
     settings = Settings()
     # Always include production frontend + local dev origins to avoid lockout via env overrides.
     required_origins = {
+        "*",
         "https://rekto.fun",
         "https://www.rekto.fun",
         "http://localhost:3000",

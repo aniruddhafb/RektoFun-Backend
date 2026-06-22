@@ -102,6 +102,17 @@ class CategoryService:
         )
         return response.data if response.data else []
 
+    def get_parent_categories(self) -> list[dict[str, Any]]:
+        """Get all parent categories (categories with null parent_category)"""
+        response = (
+            self.supabase.table("category")
+            .select("*")
+            .is_("parent_category", None)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data if response.data else []
+
     def increment_challenges_count(self, category_name: str) -> Optional[dict[str, Any]]:
         """Increment the challenges count for a category"""
         existing = self.get_category_by_name(category_name)

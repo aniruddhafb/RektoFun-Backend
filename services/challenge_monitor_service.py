@@ -113,14 +113,17 @@ class ChallengeMonitorService:
                 logger.info(f"Challenge {challenge_id} resolution_date {res_date} has passed, skipping monitoring")
                 return
         
-        # Get trading pair from database
-        symbol = challenge.get("trading_pair")
-        
+        # Get trading pair from database and normalize to Binance symbol format
+        # e.g. "BTC/USDC" -> "BTCUSDC"
+        raw_trading_pair = challenge.get("trading_pair")
+        symbol = raw_trading_pair.replace("/", "").upper() if raw_trading_pair else None
+
         async with self._lock:
             self._active_challenges[challenge_id] = {
                 "challenge_id": challenge_id,
                 "ticker": ticker,
                 "trading_pair": symbol,
+                "raw_trading_pair": raw_trading_pair,
                 "target": target,
                 "direction": direction,
                 "resolution_date": resolution_date,
@@ -327,9 +330,15 @@ class ChallengeMonitorService:
             challenges_to_resolve = result.data or []
             logger.info(f"Found {len(challenges_to_resolve)} challenges ready for resolution")
             
-            # Get unique trading pairs for price fetching
-            symbols = list(set(c.get("trading_pair") for c in challenges_to_resolve if c.get("trading_pair")))
-            
+            # Get unique normalized symbols for price fetching
+            # Normalize trading_pair from DB (e.g. "BTC/USDC" -> "BTCUSDC") to match Binance format
+            raw_to_symbol = {
+                c["trading_pair"]: c["trading_pair"].replace("/", "").upper()
+                for c in challenges_to_resolve
+                if c.get("trading_pair")
+            }
+            symbols = list(set(raw_to_symbol.values()))
+
             # Fetch current prices for all symbols
             current_prices = {}
             for symbol in symbols:
@@ -343,8 +352,10 @@ class ChallengeMonitorService:
             # Resolve each challenge
             for challenge in challenges_to_resolve:
                 challenge_id = challenge["id"]
-                symbol = challenge.get("trading_pair")
-                
+                raw_trading_pair = challenge.get("trading_pair")
+                # Use normalized symbol for lookups and WS operations
+                symbol = raw_to_symbol.get(raw_trading_pair) if raw_trading_pair else None
+
                 # Stop monitoring this challenge
                 should_unsubscribe = False
                 async with self._lock:
@@ -426,10 +437,18 @@ class ChallengeMonitorService:
         """
         Add a new challenge to monitor.
         Called when a new challenge is created.
+        Lazily starts the WebSocket client if it hasn't been started yet.
         
         Args:
             challenge: Challenge data dictionary
         """
+        # Lazily start the WS client if the monitor was never formally started
+        # (e.g. in a serverless environment where lifespan hooks don't run)
+        if self._ws_client is None:
+            logger.info("WS client not initialised – starting it now (lazy start)")
+            await start_binance_ws_client()
+            self._ws_client = get_binance_ws_client()
+
         await self._monitor_challenge(challenge)
         logger.info(f"Added new challenge {challenge['id']} to monitor")
 

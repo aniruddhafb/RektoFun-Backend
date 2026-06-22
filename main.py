@@ -76,14 +76,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS
-_settings = get_settings()
+# Configure CORS - TEMPORARILY ALLOW ALL ORIGINS
+# TODO: Restrict origins once the frontend domain is finalized.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -92,20 +93,17 @@ app.add_middleware(
 async def handle_options(request: Request, path: str):
     """
     Handle CORS preflight requests for all routes.
-    This ensures OPTIONS requests return a 200 OK response.
+    Mirrors any origin so cross-origin POSTs (e.g., create_challenge) work.
     """
-    _settings = get_settings()
-    origin = request.headers.get("origin", "")
-    if origin in _settings.cors_origins:
-        headers = {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Max-Age": "86400",
-        }
-        return Response(status_code=200, headers=headers)
-    return Response(status_code=200)
+    origin = request.headers.get("origin", "*")
+    headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+        "Access-Control-Allow-Credentials": "false",
+        "Access-Control-Max-Age": "86400",
+    }
+    return Response(status_code=200, headers=headers)
 
 
 @app.get("/health")
@@ -143,8 +141,11 @@ app.include_router(categories.router, prefix="/api", tags=["categories"])
 # Import Mangum for serverless deployment (Vercel)
 try:
     from mangum import Mangum
-    # Create handler for serverless deployment
-    handler = Mangum(app, lifespan="off")
+    # Use lifespan="auto" so FastAPI's startup/shutdown hooks (including
+    # start_challenge_monitor) are executed even in the serverless environment.
+    # Previously "off" meant the lifespan context never ran, so _ws_client was
+    # always None and no streams were ever activated.
+    handler = Mangum(app, lifespan="auto")
     logger.info("Mangum handler created for serverless deployment")
 except ImportError:
     handler = None
