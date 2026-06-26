@@ -155,7 +155,10 @@ class BinanceWebSocketClient:
                 callback = self._callbacks.get(symbol.upper())
                 if callback:
                     try:
-                        callback(price_update)
+                        result = callback(price_update)
+                        # Support both async and sync callbacks
+                        if asyncio.iscoroutine(result):
+                            asyncio.create_task(result)
                     except Exception as e:
                         logger.error(f"Error in price callback for {symbol}: {e}")
 
@@ -184,7 +187,10 @@ class BinanceWebSocketClient:
                     callback = self._callbacks.get(symbol.upper())
                     if callback:
                         try:
-                            callback(price_update)
+                            result = callback(price_update)
+                            # Support both async and sync callbacks
+                            if asyncio.iscoroutine(result):
+                                asyncio.create_task(result)
                         except Exception as e:
                             logger.error(f"Error in price callback for {symbol}: {e}")
 

@@ -277,7 +277,7 @@ class PositionService:
         try:
             result = (
                 self.db.table(self.table)
-                .select("*", count="exact", head=True)
+                .select("*", count="exact")
                 .execute()
             )
             

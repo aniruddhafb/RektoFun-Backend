@@ -81,12 +81,14 @@ async def create_challenge(
     - **direction**: Direction of the challenge - UP or DOWN (optional)
     - **expiry**: Expiry date for the challenge in YYYY-MM-DD format (optional)
     - **resolution_date**: Date when the challenge will be resolved in YYYY-MM-DD format (optional)
+    - **category**: Category of the challenge (optional)
     """
     service = get_challenge_service(db)
     position_service = get_position_service(db)
     try:
         # Create the challenge first
         challenge = await service.create_challenge(challenge_data)
+        print("challenge", challenge)
         
         # Create a position for the challenge creator
         position_data = PositionCreate(
@@ -95,14 +97,15 @@ async def create_challenge(
             side=Side.TEAM_A,
             creator=challenge.creator
         )
-        await position_service.create_position(position_data)
-        
+        created_position = await position_service.create_position(position_data)
+        print("created_position", created_position)
         # Start monitoring the challenge for price targets
         # Only monitor if it has a ticker and target price
         if challenge.ticker and challenge.target:
             challenge_dict = challenge.model_dump()
             await monitor_new_challenge(challenge_dict)
             logger.info(f"Started monitoring challenge {challenge.id} for price target")
+            
         
         return challenge
     except Exception as e:
@@ -140,6 +143,56 @@ async def list_challenges(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve challenges"
+        )
+
+
+@router.get(
+    "/monitor/active-streams",
+    summary="Get active subscribed streams",
+    description="Retrieve all currently active subscribed streams (trading pairs) being monitored via WebSocket"
+)
+async def get_active_subscribed_streams():
+    """
+    Get all active subscribed streams being monitored by the Challenge Monitor Service.
+    
+    Returns a list of active challenges with their trading pairs and monitoring details.
+    """
+    try:
+        monitor = get_challenge_monitor()
+        active_challenges = monitor.get_active_challenges()
+        
+        # Extract unique subscribed streams (trading pairs)
+        # trading_pair holds the normalized Binance symbol (e.g. "BTCUSDC")
+        # raw_trading_pair holds the original value from DB (e.g. "BTC/USDC")
+        subscribed_streams = {}
+        for challenge in active_challenges:
+            symbol = challenge.get("trading_pair")  # normalized Binance symbol
+            raw_pair = challenge.get("raw_trading_pair")  # original DB value
+            if symbol:
+                if symbol not in subscribed_streams:
+                    subscribed_streams[symbol] = {
+                        "symbol": symbol,
+                        "trading_pair": raw_pair,
+                        "ticker": challenge.get("ticker"),
+                        "challenges": []
+                    }
+                subscribed_streams[symbol]["challenges"].append({
+                    "challenge_id": challenge.get("challenge_id"),
+                    "target": challenge.get("target"),
+                    "direction": challenge.get("direction"),
+                    "created_at": challenge.get("created_at")
+                })
+
+        return {
+            "total_streams": len(subscribed_streams),
+            "total_monitored_challenges": len(active_challenges),
+            "streams": list(subscribed_streams.values())
+        }
+    except Exception as e:
+        logger.error(f"Failed to get active subscribed streams: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve active subscribed streams"
         )
 
 
@@ -262,6 +315,7 @@ async def update_challenge(
     - **direction**: New direction - UP or DOWN (optional)
     - **expiry**: New expiry date in YYYY-MM-DD format (optional)
     - **resolution_date**: New resolution date in YYYY-MM-DD format (optional)
+    - **category**: New category (optional)
     """
     service = get_challenge_service(db)
     try:
@@ -315,52 +369,6 @@ async def delete_challenge(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete challenge"
-        )
-
-
-@router.get(
-    "/monitor/active-streams",
-    summary="Get active subscribed streams",
-    description="Retrieve all currently active subscribed streams (trading pairs) being monitored via WebSocket"
-)
-async def get_active_subscribed_streams():
-    """
-    Get all active subscribed streams being monitored by the Challenge Monitor Service.
-    
-    Returns a list of active challenges with their trading pairs and monitoring details.
-    """
-    try:
-        monitor = get_challenge_monitor()
-        active_challenges = monitor.get_active_challenges()
-        
-        # Extract unique subscribed streams (trading pairs)
-        subscribed_streams = {}
-        for challenge in active_challenges:
-            symbol = challenge.get("trading_pair")
-            if symbol:
-                if symbol not in subscribed_streams:
-                    subscribed_streams[symbol] = {
-                        "symbol": symbol,
-                        "ticker": challenge.get("ticker"),
-                        "challenges": []
-                    }
-                subscribed_streams[symbol]["challenges"].append({
-                    "challenge_id": challenge.get("challenge_id"),
-                    "target": challenge.get("target"),
-                    "direction": challenge.get("direction"),
-                    "created_at": challenge.get("created_at")
-                })
-        
-        return {
-            "total_streams": len(subscribed_streams),
-            "total_monitored_challenges": len(active_challenges),
-            "streams": list(subscribed_streams.values())
-        }
-    except Exception as e:
-        logger.error(f"Failed to get active subscribed streams: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve active subscribed streams"
         )
 
 

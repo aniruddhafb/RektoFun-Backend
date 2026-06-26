@@ -23,7 +23,7 @@ router = APIRouter(prefix="/users", tags=["users"])
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new user",
-    description="Create a new user with the provided data"
+    description="Create a new user with the provided data, or return existing user if pubkey already exists"
 )
 async def create_user(
     user_data: UserCreate,
@@ -31,6 +31,9 @@ async def create_user(
 ):
     """
     Create a new user.
+    
+    If a pubkey is provided and a user with that pubkey already exists,
+    the existing user is returned instead of creating a duplicate.
     
     - **username**: User's display name (optional)
     - **email**: User's email address (optional)
@@ -40,6 +43,11 @@ async def create_user(
     """
     service = get_user_service(db)
     try:
+        if user_data.pubkey:
+            existing_user = await service.get_user_by_pubkey(user_data.pubkey)
+            if existing_user:
+                logger.info(f"User with pubkey {user_data.pubkey} already exists, returning existing user")
+                return existing_user
         return await service.create_user(user_data)
     except Exception as e:
         logger.error(f"Failed to create user: {e}")

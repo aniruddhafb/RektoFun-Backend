@@ -256,7 +256,8 @@ class UserService:
         try:
             result = (
                 self.db.table(self.table)
-                .select("*", count="exact", head=True)
+                .select("*", count="exact")
+                .limit(0)
                 .execute()
             )
             
