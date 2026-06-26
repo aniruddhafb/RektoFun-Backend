@@ -309,7 +309,7 @@ class ChallengeService:
             update_data = {"status": new_status.value}
             price_to_use = final_price if final_price is not None else end_price
             if new_status == ChallengeStatus.RESOLVED and price_to_use is not None:
-                update_data["final_price"] = price_to_use
+                update_data["final_price"] = round(price_to_use)
             
             # Update in database
             result = (

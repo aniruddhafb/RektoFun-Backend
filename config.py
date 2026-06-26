@@ -49,6 +49,9 @@ class Settings(BaseModel):
     )
     birdeye_chart_type: str = Field(default_factory=lambda: os.getenv("BIRDEYE_CHART_TYPE", "1m").strip())
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
+    settlement_service_url: str = Field(
+        default_factory=lambda: os.getenv("SETTLEMENT_API", "").strip()
+    )
 
     # Email configuration
     smtp_server: str = Field(default_factory=lambda: os.getenv("SMTP_SERVER", "smtp.gmail.com").strip())
