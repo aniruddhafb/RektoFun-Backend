@@ -88,18 +88,6 @@ async def list_users(
         )
 
 
-@router.get("/leaderboard", summary="Leaderboard", description="Get leaderboard of users")
-async def get_leaderboard(limit: int = Query(10, ge=1, le=1000), offset: int = Query(0, ge=0), search: Optional[str] = Query(None), db: Client = Depends(get_db_client)):
-    service = get_user_service(db)
-    try:
-        users = await service.list_users(limit=limit, offset=offset, search=search)
-        total = await service.count_users()
-        return {"users": [transform_user(u.model_dump(mode="json")) for u in users], "count": total}
-    except Exception as e:
-        logger.error(f"Failed to get leaderboard: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve leaderboard")
-
-
 @router.get(
     "/{user_id}",
     summary="Get user by ID",
@@ -311,6 +299,17 @@ async def ensure_user_by_wallet(
         )
 
 
+
+@router.get("/leaderboard", summary="Leaderboard", description="Get leaderboard of users")
+async def get_leaderboard(limit: int = Query(10, ge=1, le=1000), offset: int = Query(0, ge=0), search: Optional[str] = Query(None), db: Client = Depends(get_db_client)):
+    service = get_user_service(db)
+    try:
+        users = await service.list_users(limit=limit, offset=offset, search=search)
+        total = await service.count_users()
+        return {"users": [transform_user(u.model_dump(mode="json")) for u in users], "count": total}
+    except Exception as e:
+        logger.error(f"Failed to get leaderboard: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve leaderboard")
 
 @router.post("/wallet/{wallet_address}/follow", summary="Follow user", description="Follow a user")
 async def follow_user_endpoint(wallet_address: str, payload: dict, db: Client = Depends(get_db_client)):

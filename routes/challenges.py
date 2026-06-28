@@ -14,11 +14,13 @@ from models.challenge import (
     ChallengeUpdate,
     ChallengeResponse,
     ChallengeListResponse,
+    FrontendChallengesResponse,
     ChallengeStatus,
     Direction
 )
 from models.position import PositionCreate, Side
 from services.database import get_db_client
+from services.frontend_transformer import transform_challenges
 from services.challenge_service import get_challenge_service, ChallengeService
 from services.position_service import get_position_service
 from services.challenge_monitor_service import (
@@ -118,7 +120,6 @@ async def create_challenge(
 
 @router.get(
     "",
-    response_model=ChallengeListResponse,
     summary="List all challenges",
     description="Get a paginated list of all challenges"
 )
@@ -137,7 +138,9 @@ async def list_challenges(
     try:
         challenges = await service.list_challenges(limit=limit, offset=offset)
         total = await service.count_challenges()
-        return ChallengeListResponse(challenges=challenges, total=total)
+        # Transform raw DB records into frontend-compatible ChallengeListItem shape
+        frontend_challenges = transform_challenges([c.model_dump(mode="json") for c in challenges])
+        return {"challenges": frontend_challenges, "count": total}
     except Exception as e:
         logger.error(f"Failed to list challenges: {e}")
         raise HTTPException(
