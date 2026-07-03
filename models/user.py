@@ -44,3 +44,9 @@ class UserListResponse(BaseModel):
     """Model for list of users response"""
     users: list[UserResponse]
     total: int = Field(..., description="Total number of users")
+
+
+class UsernameCheckResponse(BaseModel):
+    """Model for username existence check response"""
+    username: str = Field(..., description="The username that was checked")
+    exists: bool = Field(..., description="Whether the username is already taken")

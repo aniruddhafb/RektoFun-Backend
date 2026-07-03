@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import EmailStr
 from supabase import Client
 
-from models.user import UserCreate, UserUpdate, UserResponse, UserListResponse
+from models.user import UserCreate, UserUpdate, UserResponse, UserListResponse, UsernameCheckResponse
 from services.database import get_db_client
 from services.user_service import get_user_service, UserService
 
@@ -41,6 +41,7 @@ async def create_user(
     - **profile_image**: URL to user's profile image (optional)
     - **bio**: User's bio/description (optional)
     """
+    print(f"user data: {user_data}")
     service = get_user_service(db)
     try:
         if user_data.pubkey:
@@ -107,7 +108,7 @@ async def get_user(
         user = await service.get_user(user_id)
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_200_OK,
                 detail=f"User with ID {user_id} not found"
             )
         return user
@@ -186,6 +187,33 @@ async def get_user_by_email(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user"
+        )
+
+
+@router.get(
+    "/check-username/{username}",
+    response_model=UsernameCheckResponse,
+    summary="Check if a username exists",
+    description="Check whether a given username is already taken"
+)
+async def check_username(
+    username: str,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Check whether a username already exists.
+
+    - **username**: The username to check
+    """
+    service = get_user_service(db)
+    try:
+        exists = await service.username_exists(username)
+        return UsernameCheckResponse(username=username, exists=exists)
+    except Exception as e:
+        logger.error(f"Failed to check username {username}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check username"
         )
 
 
