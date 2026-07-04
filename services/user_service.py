@@ -137,6 +137,51 @@ class UserService:
             logger.error(f"Error fetching user by email {email}: {e}")
             raise
 
+    async def get_user_by_username(self, username: str) -> Optional[UserResponse]:
+        """
+        Get a user by username.
+
+        Args:
+            username: The username to look up
+
+        Returns:
+            UserResponse if found, None otherwise
+
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            result = (
+                self.db.table(self.table)
+                .select("*")
+                .eq("username", username)
+                .execute()
+            )
+
+            if not result.data:
+                return None
+
+            return UserResponse(**result.data[0])
+
+        except Exception as e:
+            logger.error(f"Error fetching user by username {username}: {e}")
+            raise
+
+    async def username_exists(self, username: str) -> bool:
+        """
+        Check whether a username is already taken.
+
+        Args:
+            username: The username to check
+
+        Returns:
+            True if a user with this username exists, False otherwise
+
+        Raises:
+            Exception: If database operation fails
+        """
+        return await self.get_user_by_username(username) is not None
+
     async def list_users(
         self,
         limit: int = 100,
