@@ -79,7 +79,7 @@ async def create_challenge(
     - **mode**: Challenge mode - PVP or TEAM (optional)
     - **result**: Result side if resolved (optional)
     - **direction**: Direction of the challenge - UP or DOWN (optional)
-    - **expiry**: Expiry date for the challenge in YYYY-MM-DD format (optional)
+    - **expiry**: Expiry timestamp for the challenge in ISO 8601 format (optional)
     - **resolution_date**: Date when the challenge will be resolved in YYYY-MM-DD format (optional)
     - **category**: Category of the challenge (optional)
     """
@@ -313,7 +313,7 @@ async def update_challenge(
     - **mode**: New mode (optional)
     - **result**: New result (optional)
     - **direction**: New direction - UP or DOWN (optional)
-    - **expiry**: New expiry date in YYYY-MM-DD format (optional)
+    - **expiry**: New expiry timestamp in ISO 8601 format (optional)
     - **resolution_date**: New resolution date in YYYY-MM-DD format (optional)
     - **category**: New category (optional)
     """
