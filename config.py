@@ -36,18 +36,6 @@ class Settings(BaseModel):
             if origin.strip()
         ]
     )
-    birdeye_api_key: str = Field(default_factory=lambda: os.getenv("BIRDEYE_API_KEY", "").strip())
-    birdeye_chain: str = Field(default_factory=lambda: os.getenv("BIRDEYE_CHAIN", "solana").strip())
-    birdeye_price_address: str = Field(
-        default_factory=lambda: os.getenv(
-            "BIRDEYE_PRICE_ADDRESS",
-            "So11111111111111111111111111111111111111112",
-        ).strip()
-    )
-    birdeye_price_currency: str = Field(
-        default_factory=lambda: os.getenv("BIRDEYE_PRICE_CURRENCY", "usd").strip()
-    )
-    birdeye_chart_type: str = Field(default_factory=lambda: os.getenv("BIRDEYE_CHART_TYPE", "1m").strip())
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
     settlement_service_url: str = Field(
         default_factory=lambda: os.getenv("SETTLEMENT_API", "").strip()

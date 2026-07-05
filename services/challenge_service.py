@@ -152,13 +152,13 @@ class ChallengeService:
         try:
             result = (
                 self.db.table(self.table)
-                .select("*")
+                .select("*, creator_details:user!challenge_creator_fkey(*)")
                 .range(offset, offset + limit - 1)
                 .execute()
             )
-            
+
             return [ChallengeResponse(**challenge) for challenge in result.data]
-            
+
         except Exception as e:
             logger.error(f"Error listing challenges: {e}")
             raise
