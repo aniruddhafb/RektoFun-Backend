@@ -185,34 +185,54 @@ class UserService:
     async def list_users(
         self,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        search: str | None = None
     ) -> list[UserResponse]:
-        """
-        List users with pagination.
-        
-        Args:
-            limit: Maximum number of users to return
-            offset: Number of users to skip
-            
-        Returns:
-            List of UserResponse objects
-            
-        Raises:
-            Exception: If database operation fails
-        """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*")
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
-            
+            query = self.db.table(self.table).select("*").range(offset, offset + limit - 1)
+            if search:
+                query = query.ilike("username", f"%{search}%")
+            result = query.execute()
             return [UserResponse(**user) for user in result.data]
-            
         except Exception as e:
             logger.error(f"Error listing users: {e}")
             raise
+
+    async def add_follower(self, user_id: int, follower_id: str):
+        import json as _json
+        user = await self.get_user(user_id)
+        if not user:
+            return None
+        followers = user.model_dump(mode="json").get("followers") or "[]"
+        if isinstance(followers, str):
+            followers = _json.loads(followers)
+        if follower_id not in followers:
+            followers.append(follower_id)
+        result = self.db.table(self.table).update({"followers": followers}).eq("id", user_id).execute()
+        return UserResponse(**result.data[0]) if result.data else None
+
+    async def remove_follower(self, user_id: int, follower_id: str):
+        import json as _json
+        user = await self.get_user(user_id)
+        if not user:
+            return None
+        followers = user.model_dump(mode="json").get("followers") or "[]"
+        if isinstance(followers, str):
+            followers = _json.loads(followers)
+        if follower_id in followers:
+            followers.remove(follower_id)
+        result = self.db.table(self.table).update({"followers": followers}).eq("id", user_id).execute()
+        return UserResponse(**result.data[0]) if result.data else None
+
+    async def is_following(self, user_id: int, follower_id: str) -> bool:
+        import json as _json
+        user = await self.get_user(user_id)
+        if not user:
+            return False
+        followers = user.model_dump(mode="json").get("followers") or "[]"
+        if isinstance(followers, str):
+            followers = _json.loads(followers)
+        return follower_id in followers
 
     async def update_user(
         self,

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import EmailStr
 from supabase import Client
 
-from models.user import UserCreate, UserUpdate, UserResponse, UserListResponse, UsernameCheckResponse
+from models.user import UserCreate, UserUpdate, UserResponse, UserListResponse
 from services.database import get_db_client
 from services.user_service import get_user_service, UserService
 from services.frontend_transformer import transform_user
@@ -41,7 +41,6 @@ async def create_user(
     - **profile_image**: URL to user's profile image (optional)
     - **bio**: User's bio/description (optional)
     """
-    print(f"user data: {user_data}")
     service = get_user_service(db)
     try:
         pubkey = user_data.pubkey
@@ -89,18 +88,6 @@ async def list_users(
         )
 
 
-@router.get("/leaderboard", summary="Leaderboard", description="Get leaderboard of users")
-async def get_leaderboard(limit: int = Query(10, ge=1, le=1000), offset: int = Query(0, ge=0), search: Optional[str] = Query(None), db: Client = Depends(get_db_client)):
-    service = get_user_service(db)
-    try:
-        users = await service.list_users(limit=limit, offset=offset, search=search)
-        total = await service.count_users()
-        return {"users": [transform_user(u.model_dump(mode="json")) for u in users], "count": total}
-    except Exception as e:
-        logger.error(f"Failed to get leaderboard: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve leaderboard")
-
-
 @router.get(
     "/{user_id}",
     summary="Get user by ID",
@@ -120,7 +107,7 @@ async def get_user(
         user = await service.get_user(user_id)
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_200_OK,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User with ID {user_id} not found"
             )
         return user
@@ -198,33 +185,6 @@ async def get_user_by_email(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user"
-        )
-
-
-@router.get(
-    "/check-username/{username}",
-    response_model=UsernameCheckResponse,
-    summary="Check if a username exists",
-    description="Check whether a given username is already taken"
-)
-async def check_username(
-    username: str,
-    db: Client = Depends(get_db_client)
-):
-    """
-    Check whether a username already exists.
-
-    - **username**: The username to check
-    """
-    service = get_user_service(db)
-    try:
-        exists = await service.username_exists(username)
-        return UsernameCheckResponse(username=username, exists=exists)
-    except Exception as e:
-        logger.error(f"Failed to check username {username}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to check username"
         )
 
 
@@ -339,6 +299,17 @@ async def ensure_user_by_wallet(
         )
 
 
+
+@router.get("/leaderboard", summary="Leaderboard", description="Get leaderboard of users")
+async def get_leaderboard(limit: int = Query(10, ge=1, le=1000), offset: int = Query(0, ge=0), search: Optional[str] = Query(None), db: Client = Depends(get_db_client)):
+    service = get_user_service(db)
+    try:
+        users = await service.list_users(limit=limit, offset=offset, search=search)
+        total = await service.count_users()
+        return {"users": [transform_user(u.model_dump(mode="json")) for u in users], "count": total}
+    except Exception as e:
+        logger.error(f"Failed to get leaderboard: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve leaderboard")
 
 @router.post("/wallet/{wallet_address}/follow", summary="Follow user", description="Follow a user")
 async def follow_user_endpoint(wallet_address: str, payload: dict, db: Client = Depends(get_db_client)):
