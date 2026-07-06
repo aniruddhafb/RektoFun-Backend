@@ -8,6 +8,8 @@ from typing import Optional, Any
 
 from pydantic import BaseModel, Field
 
+from models.user import UserResponse
+
 
 class ChallengeStatus(str, Enum):
     """Challenge status enum matching Supabase schema"""
@@ -59,10 +61,11 @@ class ChallengeBase(BaseModel):
     mode: Optional[ChallengeMode] = Field(None, description="Challenge mode (PVP or TEAM)")
     result: Optional[Side] = Field(None, description="Result side if resolved")
     direction: Optional[Direction] = Field(None, description="Direction of the challenge (UP or DOWN)")
-    expiry: Optional[date] = Field(None, description="This is the date when new bets will no longer be accepted for the challenge")
+    expiry: Optional[datetime] = Field(None, description="This is the timestamp when new bets will no longer be accepted for the challenge")
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
     final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeCreate(ChallengeBase):
@@ -87,16 +90,18 @@ class ChallengeUpdate(BaseModel):
     mode: Optional[ChallengeMode] = Field(None, description="Challenge mode (PVP or TEAM)")
     result: Optional[Side] = Field(None, description="Result side if resolved")
     direction: Optional[Direction] = Field(None, description="Direction of the challenge (UP or DOWN)")
-    expiry: Optional[date] = Field(None, description="Expiry date for the challenge")
+    expiry: Optional[datetime] = Field(None, description="Expiry timestamp for the challenge")
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
     final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeResponse(ChallengeBase):
     """Model for challenge response data"""
     id: int = Field(..., description="Unique challenge ID")
     created_at: datetime = Field(..., description="Challenge creation timestamp")
+    creator_details: Optional[UserResponse] = Field(None, description="Details of the user who created the challenge")
 
     class Config:
         from_attributes = True

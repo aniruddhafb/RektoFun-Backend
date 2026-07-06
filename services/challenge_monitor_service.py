@@ -375,14 +375,14 @@ class ChallengeMonitorService:
         """
         try:
             service = self._get_challenge_service()
-            from datetime import date
-            
+            from datetime import datetime, timezone
+
             # Get challenges where expiry has passed but still OPEN
             result = (
                 service.db.table("challenge")
                 .select("*")
                 .eq("status", ChallengeStatus.OPEN.value)
-                .lt("expiry", date.today().isoformat())
+                .lt("expiry", datetime.now(timezone.utc).isoformat())
                 .execute()
             )
             

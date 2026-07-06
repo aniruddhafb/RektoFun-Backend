@@ -152,13 +152,13 @@ class ChallengeService:
         try:
             result = (
                 self.db.table(self.table)
-                .select("*")
+                .select("*, creator_details:user!challenge_creator_fkey(*)")
                 .range(offset, offset + limit - 1)
                 .execute()
             )
-            
+
             return [ChallengeResponse(**challenge) for challenge in result.data]
-            
+
         except Exception as e:
             logger.error(f"Error listing challenges: {e}")
             raise
@@ -334,7 +334,7 @@ class ChallengeService:
 
     async def get_expired_open_challenges(self) -> list[dict]:
         """
-        Get all OPEN challenges that have passed their expiry date.
+        Get all OPEN challenges that have passed their expiry timestamp.
         These challenges should transition to PENDING_RESOLUTION.
         
         Returns:
@@ -344,12 +344,12 @@ class ChallengeService:
             Exception: If database operation fails
         """
         try:
-            from datetime import date
+            from datetime import datetime, timezone
             result = (
                 self.db.table(self.table)
                 .select("*")
                 .eq("status", ChallengeStatus.OPEN.value)
-                .lt("expiry", date.today().isoformat())
+                .lt("expiry", datetime.now(timezone.utc).isoformat())
                 .execute()
             )
             
