@@ -65,7 +65,7 @@ class ChallengeBase(BaseModel):
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
     final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
-    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeCreate(ChallengeBase):
@@ -94,7 +94,7 @@ class ChallengeUpdate(BaseModel):
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
     final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
-    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeResponse(ChallengeBase):

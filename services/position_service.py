@@ -47,7 +47,7 @@ class PositionService:
             position = PositionResponse(**created_position)
 
             if position.challenge_id and position.side and position.creator:
-                await self._update_highest_bet(position)
+                await self._update_bet_info(position)
 
             return position
 
@@ -55,10 +55,11 @@ class PositionService:
             logger.error(f"Error creating position: {e}")
             raise
 
-    async def _update_highest_bet(self, position: PositionResponse) -> None:
+    async def _update_bet_info(self, position: PositionResponse) -> None:
         """
-        Update the parent challenge's bet_info.highest_bet for this position's side if this
-        position's bet is the largest seen so far on that side.
+        Update the parent challenge's bet_info for this position's side:
+        - highest_bet: the largest single bet seen so far on that side
+        - team_count: running total_bets (count) and total_amount (sum of bets) on that side
         """
         try:
             challenge_service = get_challenge_service(self.db)
@@ -75,12 +76,20 @@ class PositionService:
                 return
 
             bet_info = dict(challenge.bet_info or {})
-            highest_bet = dict(bet_info.get("highest_bet") or {})
-            existing = highest_bet.get(position.side.value)
+            side_key = position.side.value
             bet = position.bet or 0
 
+            team_count = dict(bet_info.get("team_count") or {})
+            side_count = dict(team_count.get(side_key) or {"total_bets": 0, "total_amount": 0})
+            side_count["total_bets"] = side_count.get("total_bets", 0) + 1
+            side_count["total_amount"] = side_count.get("total_amount", 0) + bet
+            team_count[side_key] = side_count
+            bet_info["team_count"] = team_count
+
+            highest_bet = dict(bet_info.get("highest_bet") or {})
+            existing = highest_bet.get(side_key)
             if existing is None or bet > existing.get("bet", 0):
-                highest_bet[position.side.value] = {
+                highest_bet[side_key] = {
                     "id": user.id,
                     "username": user.username,
                     "profile_image": user.profile_image,
@@ -88,10 +97,11 @@ class PositionService:
                     "bet": bet,
                 }
                 bet_info["highest_bet"] = highest_bet
-                await challenge_service.update_challenge(
-                    position.challenge_id,
-                    ChallengeUpdate(bet_info=bet_info)
-                )
+
+            await challenge_service.update_challenge(
+                position.challenge_id,
+                ChallengeUpdate(bet_info=bet_info)
+            )
         except Exception as e:
             logger.error(f"Failed to update bet_info for challenge {position.challenge_id}: {e}")
 
