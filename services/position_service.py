@@ -8,6 +8,9 @@ from typing import Optional
 from supabase import Client
 
 from models.position import PositionCreate, PositionUpdate, PositionResponse, Side
+from models.challenge import ChallengeUpdate
+from services.challenge_service import get_challenge_service
+from services.user_service import get_user_service
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +44,56 @@ class PositionService:
             
             created_position = result.data[0]
             logger.info(f"Created position with ID: {created_position['id']}")
-            return PositionResponse(**created_position)
-            
+            position = PositionResponse(**created_position)
+
+            if position.challenge_id and position.side and position.creator:
+                await self._update_highest_bet(position)
+
+            return position
+
         except Exception as e:
             logger.error(f"Error creating position: {e}")
             raise
+
+    async def _update_highest_bet(self, position: PositionResponse) -> None:
+        """
+        Update the parent challenge's bet_info.highest_bet for this position's side if this
+        position's bet is the largest seen so far on that side.
+        """
+        try:
+            challenge_service = get_challenge_service(self.db)
+            user_service = get_user_service(self.db)
+
+            challenge = await challenge_service.get_challenge(position.challenge_id)
+            if not challenge:
+                logger.warning(f"Challenge {position.challenge_id} not found; skipping bet_info update")
+                return
+
+            user = await user_service.get_user(position.creator)
+            if not user:
+                logger.warning(f"User {position.creator} not found; skipping bet_info update")
+                return
+
+            bet_info = dict(challenge.bet_info or {})
+            highest_bet = dict(bet_info.get("highest_bet") or {})
+            existing = highest_bet.get(position.side.value)
+            bet = position.bet or 0
+
+            if existing is None or bet > existing.get("bet", 0):
+                highest_bet[position.side.value] = {
+                    "id": user.id,
+                    "username": user.username,
+                    "profile_image": user.profile_image,
+                    "pubkey": user.pubkey,
+                    "bet": bet,
+                }
+                bet_info["highest_bet"] = highest_bet
+                await challenge_service.update_challenge(
+                    position.challenge_id,
+                    ChallengeUpdate(bet_info=bet_info)
+                )
+        except Exception as e:
+            logger.error(f"Failed to update bet_info for challenge {position.challenge_id}: {e}")
 
     async def get_position(self, position_id: int) -> Optional[PositionResponse]:
         """
