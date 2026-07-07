@@ -12,7 +12,6 @@ from supabase import Client
 from models.user import UserCreate, UserUpdate, UserResponse, UserListResponse, UsernameCheckResponse
 from services.database import get_db_client
 from services.user_service import get_user_service, UserService
-from services.frontend_transformer import transform_user
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.post(
     "",
+    response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new user",
     description="Create a new user with the provided data, or return existing user if pubkey already exists"
@@ -44,14 +44,12 @@ async def create_user(
     print(f"user data: {user_data}")
     service = get_user_service(db)
     try:
-        pubkey = user_data.pubkey
-        if pubkey:
-            existing_user = await service.get_user_by_pubkey(pubkey)
+        if user_data.pubkey:
+            existing_user = await service.get_user_by_pubkey(user_data.pubkey)
             if existing_user:
-                logger.info(f"User with pubkey {pubkey} already exists, returning existing user")
-                return transform_user(existing_user.model_dump(mode="json"))
-        created = await service.create_user(user_data)
-        return transform_user(created.model_dump(mode="json"))
+                logger.info(f"User with pubkey {user_data.pubkey} already exists, returning existing user")
+                return existing_user
+        return await service.create_user(user_data)
     except Exception as e:
         logger.error(f"Failed to create user: {e}")
         raise HTTPException(
@@ -62,6 +60,7 @@ async def create_user(
 
 @router.get(
     "",
+    response_model=UserListResponse,
     summary="List all users",
     description="Get a paginated list of all users"
 )
@@ -80,7 +79,7 @@ async def list_users(
     try:
         users = await service.list_users(limit=limit, offset=offset)
         total = await service.count_users()
-        return {"users": [transform_user(u.model_dump(mode="json")) for u in users], "count": total}
+        return UserListResponse(users=users, total=total)
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
         raise HTTPException(
@@ -89,20 +88,9 @@ async def list_users(
         )
 
 
-@router.get("/leaderboard", summary="Leaderboard", description="Get leaderboard of users")
-async def get_leaderboard(limit: int = Query(10, ge=1, le=1000), offset: int = Query(0, ge=0), search: Optional[str] = Query(None), db: Client = Depends(get_db_client)):
-    service = get_user_service(db)
-    try:
-        users = await service.list_users(limit=limit, offset=offset, search=search)
-        total = await service.count_users()
-        return {"users": [transform_user(u.model_dump(mode="json")) for u in users], "count": total}
-    except Exception as e:
-        logger.error(f"Failed to get leaderboard: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve leaderboard")
-
-
 @router.get(
     "/{user_id}",
+    response_model=UserResponse,
     summary="Get user by ID",
     description="Retrieve a specific user by their ID"
 )
@@ -136,6 +124,7 @@ async def get_user(
 
 @router.get(
     "/by-pubkey/{pubkey}",
+    response_model=UserResponse,
     summary="Get user by public key",
     description="Retrieve a user by their Solana public key"
 )
@@ -156,7 +145,7 @@ async def get_user_by_pubkey(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User with pubkey {pubkey} not found"
             )
-        return transform_user(user.model_dump(mode="json"))
+        return user
     except HTTPException:
         raise
     except Exception as e:
@@ -230,6 +219,7 @@ async def check_username(
 
 @router.patch(
     "/{user_id}",
+    response_model=UserResponse,
     summary="Update user",
     description="Update an existing user's data"
 )
@@ -256,7 +246,7 @@ async def update_user(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User with ID {user_id} not found"
             )
-        return transform_user(user.model_dump(mode="json"))
+        return user
     except HTTPException:
         raise
     except Exception as e:
@@ -266,137 +256,6 @@ async def update_user(
             detail="Failed to update user"
         )
 
-
-
-
-@router.get(
-    "/wallet/{wallet_address}",
-    summary="Get user by wallet address",
-    description="Retrieve a user by their wallet address (alias for by-pubkey)"
-)
-async def get_user_by_wallet(
-    wallet_address: str,
-    db: Client = Depends(get_db_client)
-):
-    """
-    Get a user by their wallet address.
-    
-    - **wallet_address**: The Solana public key / wallet address of the user
-    """
-    service = get_user_service(db)
-    try:
-        user = await service.get_user_by_pubkey(wallet_address)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User with wallet address {wallet_address} not found"
-            )
-        return transform_user(user.model_dump(mode="json"))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get user by wallet {wallet_address}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user"
-        )
-
-
-
-@router.post(
-    "/wallet/{wallet_address}/ensure",
-    summary="Ensure user exists by wallet",
-    description="Get existing user or create a new one if not found"
-)
-async def ensure_user_by_wallet(
-    wallet_address: str,
-    user_data: Optional[UserUpdate] = None,
-    db: Client = Depends(get_db_client)
-):
-    """
-    Ensure a user exists for the given wallet address.
-    Returns existing user if found, otherwise creates a new user.
-    """
-    service = get_user_service(db)
-    try:
-        existing = await service.get_user_by_pubkey(wallet_address)
-        if existing:
-            return transform_user(existing.model_dump(mode="json"))
-        
-        # Create new user with wallet address
-        create_payload = {"pubkey": wallet_address}
-        if user_data:
-            data = user_data.model_dump(exclude_none=True, exclude_unset=True)
-            create_payload.update({k: v for k, v in data.items() if v is not None})
-        
-        created = await service.create_user(UserCreate(**create_payload))
-        return transform_user(created.model_dump(mode="json"))
-    except Exception as e:
-        logger.error(f"Failed to ensure user by wallet {wallet_address}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to ensure user"
-        )
-
-
-
-@router.post("/wallet/{wallet_address}/follow", summary="Follow user", description="Follow a user")
-async def follow_user_endpoint(wallet_address: str, payload: dict, db: Client = Depends(get_db_client)):
-    service = get_user_service(db)
-    follower_wallet = payload.get("follower_wallet_address")
-    try:
-        target = await service.get_user_by_pubkey(wallet_address)
-        follower = await service.get_user_by_pubkey(follower_wallet) if follower_wallet else None
-        if not target: raise HTTPException(status_code=404, detail="Target not found")
-        if not follower: raise HTTPException(status_code=404, detail="Follower not found")
-        updated_target = await service.add_follower(target.id, str(follower.id))
-        return transform_user(updated_target.model_dump(mode="json"))
-    except HTTPException: raise
-    except Exception as e: logger.error(f"Follow error: {e}"); raise HTTPException(status_code=500, detail="Failed")
-
-@router.post("/wallet/{wallet_address}/unfollow", summary="Unfollow user", description="Unfollow a user")
-async def unfollow_user_endpoint(wallet_address: str, payload: dict, db: Client = Depends(get_db_client)):
-    service = get_user_service(db)
-    follower_wallet = payload.get("follower_wallet_address")
-    try:
-        target = await service.get_user_by_pubkey(wallet_address)
-        follower = await service.get_user_by_pubkey(follower_wallet) if follower_wallet else None
-        if not target: raise HTTPException(status_code=404, detail="Target not found")
-        if not follower: raise HTTPException(status_code=404, detail="Follower not found")
-        updated_target = await service.remove_follower(target.id, str(follower.id))
-        return transform_user(updated_target.model_dump(mode="json"))
-    except HTTPException: raise
-    except Exception as e: logger.error(f"Unfollow error: {e}"); raise HTTPException(status_code=500, detail="Failed")
-
-@router.get("/wallet/{wallet_address}/follow-status", summary="Check follow status", description="Check follow status")
-async def get_follow_status(wallet_address: str, follower_wallet_address: str = Query(...), db: Client = Depends(get_db_client)):
-    service = get_user_service(db)
-    try:
-        target = await service.get_user_by_pubkey(wallet_address)
-        follower = await service.get_user_by_pubkey(follower_wallet_address)
-        if not target or not follower: return {"is_following": False}
-        is_following = await service.is_following(target.id, str(follower.id))
-        return {"is_following": is_following}
-    except Exception as e: logger.error(f"Follow status error: {e}"); return {"is_following": False}
-
-@router.post("/accept-referral", summary="Accept referral", description="Accept referral")
-async def accept_referral(payload: dict, db: Client = Depends(get_db_client)):
-    new_user_wallet = payload.get("new_user_wallet")
-    referrer_code = payload.get("referrer_code")
-    service = get_user_service(db)
-    try:
-        new_user = await service.get_user_by_pubkey(new_user_wallet) if new_user_wallet else None
-        if not new_user: raise HTTPException(status_code=404, detail="New user not found")
-        updated = await service.update_user(new_user.id, UserUpdate(referred_by=referrer_code))
-        referrer = None
-        all_users = await service.list_users(limit=1000, offset=0)
-        for u in all_users:
-            transformed = transform_user(u.model_dump(mode="json"))
-            if transformed.get("referral_code") == referrer_code:
-                referrer = u; break
-        return {"newUser": transform_user(updated.model_dump(mode="json")) if updated else transform_user(new_user.model_dump(mode="json")), "referrer": transform_user(referrer.model_dump(mode="json")) if referrer else {"referral_code": referrer_code}}
-    except HTTPException: raise
-    except Exception as e: logger.error(f"Referral error: {e}"); raise HTTPException(status_code=500, detail="Failed")
 
 @router.delete(
     "/{user_id}",
