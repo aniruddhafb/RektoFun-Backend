@@ -3,6 +3,8 @@ User service for CRUD operations on the user table.
 """
 
 import logging
+import secrets
+import string
 from typing import Optional
 
 from supabase import Client
@@ -19,6 +21,20 @@ class UserService:
         self.db = db_client
         self.table = "user"
 
+    def _normalize_referral_code(self, referral_code: str) -> str:
+        return referral_code.strip().upper()
+
+    async def _generate_referral_code(self) -> str:
+        alphabet = string.ascii_uppercase + string.digits
+
+        for _ in range(10):
+            code = "".join(secrets.choice(alphabet) for _ in range(8))
+            existing_user = await self.get_user_by_referral_code(code)
+            if not existing_user:
+                return code
+
+        raise Exception("Failed to generate a unique referral code")
+
     async def create_user(self, user_data: UserCreate) -> UserResponse:
         """
         Create a new user in the database.
@@ -33,7 +49,14 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            data = user_data.model_dump(exclude_unset=True)
+            data = user_data.model_dump(exclude_unset=True, exclude_none=True, exclude={"referrer_code"})
+
+            if "referral_code" in data:
+                data["referral_code"] = self._normalize_referral_code(data["referral_code"])
+            else:
+                data["referral_code"] = await self._generate_referral_code()
+
+            data.setdefault("referrals", [])
             result = self.db.table(self.table).insert(data).execute()
             
             if not result.data:
@@ -45,6 +68,28 @@ class UserService:
             
         except Exception as e:
             logger.error(f"Error creating user: {e}")
+            raise
+
+    async def get_user_by_referral_code(self, referral_code: str) -> Optional[UserResponse]:
+        """
+        Get a user by their referral code.
+        """
+        try:
+            normalized_code = self._normalize_referral_code(referral_code)
+            result = (
+                self.db.table(self.table)
+                .select("*")
+                .eq("referral_code", normalized_code)
+                .execute()
+            )
+
+            if not result.data:
+                return None
+
+            return UserResponse(**result.data[0])
+
+        except Exception as e:
+            logger.error(f"Error fetching user by referral code {referral_code}: {e}")
             raise
 
     async def get_user(self, user_id: int) -> Optional[UserResponse]:
@@ -255,6 +300,44 @@ class UserService:
             
         except Exception as e:
             logger.error(f"Error updating user {user_id}: {e}")
+            raise
+
+    async def accept_referral(self, new_user_wallet: str, referrer_code: str) -> UserResponse:
+        """
+        Apply a referral code to a user and record the referred wallet on the referrer.
+        """
+        try:
+            normalized_code = self._normalize_referral_code(referrer_code)
+            new_user = await self.get_user_by_pubkey(new_user_wallet)
+            if not new_user:
+                raise ValueError("User accepting referral was not found")
+
+            referrer = await self.get_user_by_referral_code(normalized_code)
+            if not referrer:
+                raise ValueError("Referral code not found")
+
+            if new_user.pubkey == referrer.pubkey:
+                raise ValueError("You cannot redeem your own referral code")
+
+            if new_user.referred_by:
+                raise ValueError("Referral code already redeemed")
+
+            referrals = list(referrer.referrals or [])
+            if new_user.pubkey and new_user.pubkey not in referrals:
+                referrals.append(new_user.pubkey)
+
+            self.db.table(self.table).update({"referred_by": normalized_code}).eq("id", new_user.id).execute()
+            self.db.table(self.table).update({"referrals": referrals}).eq("id", referrer.id).execute()
+
+            updated_user = await self.get_user(new_user.id)
+            if not updated_user:
+                raise Exception("Failed to load updated user after accepting referral")
+
+            logger.info(f"Accepted referral {normalized_code} for user {new_user.id}")
+            return updated_user
+
+        except Exception as e:
+            logger.error(f"Error accepting referral: {e}")
             raise
 
     async def delete_user(self, user_id: int) -> bool:
