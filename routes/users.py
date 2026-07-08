@@ -89,40 +89,6 @@ async def list_users(
 
 
 @router.get(
-    "/{user_id}",
-    response_model=UserResponse,
-    summary="Get user by ID",
-    description="Retrieve a specific user by their ID"
-)
-async def get_user(
-    user_id: int,
-    db: Client = Depends(get_db_client)
-):
-    """
-    Get a user by their ID.
-    
-    - **user_id**: The unique ID of the user
-    """
-    service = get_user_service(db)
-    try:
-        user = await service.get_user(user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_200_OK,
-                detail=f"User with ID {user_id} not found"
-            )
-        return user
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get user {user_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user"
-        )
-
-
-@router.get(
     "/by-pubkey/{pubkey}",
     response_model=UserResponse,
     summary="Get user by public key",
@@ -150,6 +116,40 @@ async def get_user_by_pubkey(
         raise
     except Exception as e:
         logger.error(f"Failed to get user by pubkey {pubkey}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve user"
+        )
+
+
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    summary="Get user by ID",
+    description="Retrieve a specific user by their ID"
+)
+async def get_user(
+    user_id: int,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Get a user by their ID.
+    
+    - **user_id**: The unique ID of the user
+    """
+    service = get_user_service(db)
+    try:
+        user = await service.get_user(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user"
