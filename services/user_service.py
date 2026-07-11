@@ -278,7 +278,10 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            data = user_data.model_dump(exclude_unset=True, exclude_none=True)
+            # Keep explicitly provided null values so nullable profile fields can
+            # be cleared (for example, disconnecting a linked X account).
+            # exclude_unset still prevents omitted fields from being overwritten.
+            data = user_data.model_dump(exclude_unset=True)
             
             if not data:
                 logger.warning("No data provided for user update")

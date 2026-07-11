@@ -3,7 +3,7 @@ User models for request/response validation and data transfer.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -15,9 +15,11 @@ class UserBase(BaseModel):
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
+    twitter_username: Optional[str] = Field(None, max_length=15, description="User's X/Twitter username")
     referral_code: Optional[str] = Field(None, description="User's referral code")
     referred_by: Optional[str] = Field(None, description="Referral code used by this user")
     referrals: list[str] = Field(default_factory=list, description="Wallets referred by this user")
+    user_type: Literal["user", "moderator"] = Field("user", description="Account role; moderators earn a 40% referral fee share")
 
 
 class UserCreate(UserBase):
@@ -32,6 +34,7 @@ class UserUpdate(BaseModel):
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
+    twitter_username: Optional[str] = Field(None, max_length=15, description="User's X/Twitter username")
 
 
 class UserResponse(UserBase):
