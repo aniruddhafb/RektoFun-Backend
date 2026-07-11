@@ -25,6 +25,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+def _is_username_unique_violation(error: Exception) -> bool:
+    """Identify the PostgreSQL unique-index error as a race-condition fallback."""
+    error_text = str(error).lower()
+    return (
+        "user_username_unique_idx" in error_text
+        or ("duplicate key" in error_text and "username" in error_text)
+    )
+
+
 @router.post(
     "",
     response_model=UserResponse,
@@ -56,6 +65,11 @@ async def create_user(
             if existing_user:
                 logger.info(f"User with pubkey {user_data.pubkey} already exists, returning existing user")
                 return existing_user
+        if user_data.username and await service.username_exists(user_data.username):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken"
+            )
         created_user = await service.create_user(user_data)
         if user_data.referrer_code:
             try:
@@ -64,8 +78,15 @@ async def create_user(
                 logger.warning(f"User created but referral was not applied: {referral_error}")
 
         return created_user
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create user: {e}")
+        if _is_username_unique_violation(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken"
+            ) from e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user"
@@ -314,6 +335,14 @@ async def update_user(
     """
     service = get_user_service(db)
     try:
+        if user_data.username:
+            existing_user = await service.get_user_by_username(user_data.username)
+            if existing_user and existing_user.id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This username is already taken"
+                )
+
         user = await service.update_user(user_id, user_data)
         if not user:
             raise HTTPException(
@@ -325,6 +354,11 @@ async def update_user(
         raise
     except Exception as e:
         logger.error(f"Failed to update user {user_id}: {e}")
+        if _is_username_unique_violation(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken"
+            ) from e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user"

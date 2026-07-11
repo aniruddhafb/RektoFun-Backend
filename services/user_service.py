@@ -199,7 +199,7 @@ class UserService:
             result = (
                 self.db.table(self.table)
                 .select("*")
-                .eq("username", username)
+                .ilike("username", username)
                 .execute()
             )
 
