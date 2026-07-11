@@ -52,6 +52,30 @@ class UserListResponse(BaseModel):
     total: int = Field(..., description="Total number of users")
 
 
+class LeaderboardUserResponse(UserResponse):
+    """A user enriched with realized challenge statistics."""
+    rank: int
+    won: int
+    lost: int
+    win_rate: float
+    pnl: float
+    volume: float
+
+
+class LeaderboardSummary(BaseModel):
+    total_users: int
+    total_challenges: int
+    total_volume: float
+    total_pnl: float
+
+
+class LeaderboardResponse(BaseModel):
+    users: list[LeaderboardUserResponse]
+    total: int
+    period: str
+    summary: LeaderboardSummary
+
+
 class UsernameCheckResponse(BaseModel):
     """Model for username existence check response"""
     username: str = Field(..., description="The username that was checked")

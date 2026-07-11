@@ -101,6 +101,7 @@ class ChallengeResponse(ChallengeBase):
     """Model for challenge response data"""
     id: int = Field(..., description="Unique challenge ID")
     created_at: datetime = Field(..., description="Challenge creation timestamp")
+    resolved_at: Optional[datetime] = Field(None, description="Exact UTC resolution timestamp")
     creator_details: Optional[UserResponse] = Field(None, description="Details of the user who created the challenge")
 
     class Config:

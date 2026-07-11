@@ -15,10 +15,12 @@ from models.user import (
     UserUpdate,
     UserResponse,
     UserListResponse,
+    LeaderboardResponse,
     UsernameCheckResponse,
 )
 from services.database import get_db_client
 from services.user_service import get_user_service, UserService
+from services.leaderboard_service import LeaderboardService
 
 logger = logging.getLogger(__name__)
 
@@ -125,24 +127,27 @@ async def list_users(
 
 @router.get(
     "/leaderboard",
-    response_model=UserListResponse,
-    summary="Get referral leaderboard",
-    description="Get users ordered by referral activity"
+    response_model=LeaderboardResponse,
+    summary="Get challenge performance leaderboard",
+    description="Get realized wins, losses, P&L and volume for resolved challenges"
 )
 async def get_leaderboard(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of users to return"),
     offset: int = Query(0, ge=0, description="Number of users to skip"),
+    period: str = Query("all", pattern="^(1d|7d|30d|all)$"),
+    search: Optional[str] = Query(None, max_length=100),
+    sort: str = Query("pnl", pattern="^(rank|win_rate|won|lost|pnl|volume)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     db: Client = Depends(get_db_client)
 ):
     """
     Get users for leaderboard displays.
     """
-    service = get_user_service(db)
     try:
-        users = await service.list_users(limit=limit, offset=offset)
-        users = sorted(users, key=lambda user: len(user.referrals or []), reverse=True)
-        total = await service.count_users()
-        return UserListResponse(users=users, total=total)
+        return await LeaderboardService(db).get_leaderboard(
+            period=period, limit=limit, offset=offset, search=search,
+            sort=sort, order=order,
+        )
     except Exception as e:
         logger.error(f"Failed to get leaderboard: {e}")
         raise HTTPException(
