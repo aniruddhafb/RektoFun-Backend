@@ -14,6 +14,7 @@ class UserBase(BaseModel):
     email: Optional[EmailStr] = Field(None, description="User's email address")
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
+    twitter_profile_image: Optional[str] = Field(None, description="URL to user's linked X/Twitter profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
     twitter_username: Optional[str] = Field(None, max_length=15, description="User's X/Twitter username")
     referral_code: Optional[str] = Field(None, description="User's referral code")
@@ -35,6 +36,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = Field(None, description="User's email address")
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
+    twitter_profile_image: Optional[str] = Field(None, description="URL to user's linked X/Twitter profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
     twitter_username: Optional[str] = Field(None, max_length=15, description="User's X/Twitter username")
 
