@@ -19,6 +19,8 @@ class UserBase(BaseModel):
     referral_code: Optional[str] = Field(None, description="User's referral code")
     referred_by: Optional[str] = Field(None, description="Referral code used by this user")
     referrals: list[str] = Field(default_factory=list, description="Wallets referred by this user")
+    followers: list[int] = Field(default_factory=list, description="IDs of users following this user")
+    following: list[int] = Field(default_factory=list, description="IDs of users this user follows")
     user_type: Literal["user", "moderator"] = Field("user", description="Account role; moderators earn a 40% referral fee share")
 
 
@@ -86,3 +88,8 @@ class AcceptReferralRequest(BaseModel):
     """Model for accepting a referral code"""
     new_user_wallet: str = Field(..., description="Wallet/public key of the user accepting the referral")
     referrer_code: str = Field(..., description="Referral code provided by the referrer")
+
+
+class FollowRequest(BaseModel):
+    """Identify the user performing a follow action."""
+    follower_wallet: str = Field(..., min_length=1, description="Wallet/public key of the acting user")

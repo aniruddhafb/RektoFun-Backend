@@ -11,6 +11,7 @@ from supabase import Client
 
 from models.user import (
     AcceptReferralRequest,
+    FollowRequest,
     UserCreate,
     UserUpdate,
     UserResponse,
@@ -220,6 +221,40 @@ async def accept_referral(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to accept referral"
         )
+
+
+@router.post("/{target_wallet}/follow", response_model=UserResponse)
+async def follow_user(
+    target_wallet: str,
+    follow_data: FollowRequest,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).set_following(
+            follow_data.follower_wallet, target_wallet, follow=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to follow user {target_wallet}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to follow user")
+
+
+@router.delete("/{target_wallet}/follow", response_model=UserResponse)
+async def unfollow_user(
+    target_wallet: str,
+    follow_data: FollowRequest,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).set_following(
+            follow_data.follower_wallet, target_wallet, follow=False
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to unfollow user {target_wallet}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unfollow user")
 
 
 @router.get(

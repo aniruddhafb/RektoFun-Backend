@@ -11,6 +11,7 @@ from models.position import PositionCreate, PositionUpdate, PositionResponse, Si
 from models.challenge import ChallengeUpdate
 from services.challenge_service import get_challenge_service
 from services.user_service import get_user_service
+from services.notification_service import get_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,11 @@ class PositionService:
 
             if position.challenge_id and position.side and position.creator:
                 await self._update_bet_info(position)
+                challenge = await get_challenge_service(self.db).get_challenge(position.challenge_id)
+                if challenge and challenge.creator != position.creator:
+                    await get_notification_service(self.db).notify_followers(
+                        position.creator, position.challenge_id, "challenge_joined"
+                    )
 
             return position
 

@@ -343,6 +343,30 @@ class UserService:
             logger.error(f"Error accepting referral: {e}")
             raise
 
+    async def set_following(
+        self, follower_wallet: str, target_wallet: str, *, follow: bool
+    ) -> UserResponse:
+        """Atomically follow or unfollow a user and return the updated target."""
+        follower = await self.get_user_by_pubkey(follower_wallet)
+        target = await self.get_user_by_pubkey(target_wallet)
+        if not follower or not target:
+            raise ValueError("Follower or target user was not found")
+        if follower.id == target.id:
+            raise ValueError("You cannot follow yourself")
+
+        self.db.rpc(
+            "set_user_following",
+            {
+                "p_follower_id": follower.id,
+                "p_target_id": target.id,
+                "p_follow": follow,
+            },
+        ).execute()
+        updated_target = await self.get_user(target.id)
+        if not updated_target:
+            raise Exception("Failed to load user after follow action")
+        return updated_target
+
     async def delete_user(self, user_id: int) -> bool:
         """
         Delete a user by ID.

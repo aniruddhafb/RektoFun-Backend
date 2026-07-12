@@ -21,6 +21,7 @@ from models.position import PositionCreate, Side
 from services.database import get_db_client
 from services.challenge_service import get_challenge_service, ChallengeService
 from services.position_service import get_position_service
+from services.notification_service import get_notification_service
 from services.challenge_monitor_service import (
     monitor_new_challenge,
     stop_monitoring_challenge,
@@ -98,6 +99,10 @@ async def create_challenge(
             creator=challenge.creator
         )
         created_position = await position_service.create_position(position_data)
+        if challenge.creator:
+            await get_notification_service(db).notify_followers(
+                challenge.creator, challenge.id, "challenge_created"
+            )
         print("created_position", created_position)
         # Start monitoring the challenge for price targets
         # Only monitor if it has a ticker and target price
