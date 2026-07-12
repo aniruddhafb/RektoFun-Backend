@@ -367,6 +367,47 @@ class UserService:
             raise Exception("Failed to load user after follow action")
         return updated_target
 
+    async def request_referral_redemption(self, wallet_address: str) -> UserResponse:
+        """Atomically snapshot redeemable earnings and reset the user's balance."""
+        result = self.db.rpc(
+            "request_referral_redemption",
+            {"p_wallet_address": wallet_address},
+        ).execute()
+        if not result.data:
+            raise ValueError("At least 5 USDC is required to redeem")
+
+        updated_user = await self.get_user_by_pubkey(wallet_address)
+        if not updated_user:
+            raise Exception("Failed to load user after redemption request")
+        return updated_user
+
+    async def get_referral_history(self, wallet_address: str) -> dict:
+        """Return sanitized commission and redemption history for a wallet."""
+        user = await self.get_user_by_pubkey(wallet_address)
+        if not user:
+            raise ValueError("User was not found")
+
+        commissions = (
+            self.db.table("referral_commissions")
+            .select("amount,created_at")
+            .eq("referrer_id", user.id)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        redemptions = (
+            self.db.table("referral_redemption_requests")
+            .select("amount,status,requested_at")
+            .eq("user_id", user.id)
+            .order("requested_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        return {
+            "commissions": commissions.data or [],
+            "redemptions": redemptions.data or [],
+        }
+
     async def delete_user(self, user_id: int) -> bool:
         """
         Delete a user by ID.

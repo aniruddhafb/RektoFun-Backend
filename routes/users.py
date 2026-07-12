@@ -11,6 +11,8 @@ from supabase import Client
 
 from models.user import (
     AcceptReferralRequest,
+    ReferralRedemptionRequest,
+    ReferralHistoryResponse,
     FollowRequest,
     UserCreate,
     UserUpdate,
@@ -221,6 +223,34 @@ async def accept_referral(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to accept referral"
         )
+
+
+@router.post("/referral-redemptions", response_model=UserResponse)
+async def request_referral_redemption(
+    redemption: ReferralRedemptionRequest,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).request_referral_redemption(redemption.wallet_address)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to create referral redemption request: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create redemption request")
+
+
+@router.get("/referral-history/{wallet_address}", response_model=ReferralHistoryResponse)
+async def get_referral_history(
+    wallet_address: str,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).get_referral_history(wallet_address)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to load referral history: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load referral history")
 
 
 @router.post("/{target_wallet}/follow", response_model=UserResponse)

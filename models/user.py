@@ -3,7 +3,7 @@ User models for request/response validation and data transfer.
 """
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -23,6 +23,7 @@ class UserBase(BaseModel):
     followers: list[int] = Field(default_factory=list, description="IDs of users following this user")
     following: list[int] = Field(default_factory=list, description="IDs of users this user follows")
     user_type: Literal["user", "moderator"] = Field("user", description="Account role; moderators earn a 40% referral fee share")
+    earnings: float = Field(0, ge=0, description="Total referral commission earned in USDC")
 
 
 class UserCreate(UserBase):
@@ -90,6 +91,16 @@ class AcceptReferralRequest(BaseModel):
     """Model for accepting a referral code"""
     new_user_wallet: str = Field(..., description="Wallet/public key of the user accepting the referral")
     referrer_code: str = Field(..., description="Referral code provided by the referrer")
+
+
+class ReferralRedemptionRequest(BaseModel):
+    """Request redemption of the connected wallet's referral earnings."""
+    wallet_address: str = Field(..., min_length=1)
+
+
+class ReferralHistoryResponse(BaseModel):
+    commissions: list[dict[str, Any]] = Field(default_factory=list)
+    redemptions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FollowRequest(BaseModel):
