@@ -284,6 +284,33 @@ async def get_challenges_by_status(
         )
 
 
+@router.get(
+    "/by-category/{category}",
+    response_model=list[ChallengeResponse],
+    summary="Get challenges by category",
+    description="Retrieve all challenges belonging to a specific category"
+)
+async def get_challenges_by_category(
+    category: str,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Get all challenges belonging to a specific category.
+
+    - **category**: The category name to filter by
+    """
+    service = get_challenge_service(db)
+    try:
+        challenges = await service.get_challenges_by_category(category)
+        return challenges
+    except Exception as e:
+        logger.error(f"Failed to get challenges by category {category}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve challenges"
+        )
+
+
 @router.patch(
     "/{challenge_id}",
     response_model=ChallengeResponse,

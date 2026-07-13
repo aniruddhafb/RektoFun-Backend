@@ -131,6 +131,33 @@ class ChallengeService:
             logger.error(f"Error fetching challenges by status {status}: {e}")
             raise
 
+    async def get_challenges_by_category(self, category: str) -> list[ChallengeResponse]:
+        """
+        Get all challenges belonging to a specific category (case-insensitive exact match).
+
+        Args:
+            category: The category name to filter by
+
+        Returns:
+            List of ChallengeResponse objects
+
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            result = (
+                self.db.table(self.table)
+                .select("*, creator_details:user!challenge_creator_fkey(*)")
+                .ilike("category", category)
+                .execute()
+            )
+
+            return [ChallengeResponse(**challenge) for challenge in result.data]
+
+        except Exception as e:
+            logger.error(f"Error fetching challenges by category {category}: {e}")
+            raise
+
     async def list_challenges(
         self,
         limit: int = 100,
