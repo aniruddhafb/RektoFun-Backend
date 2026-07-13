@@ -9,7 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import EmailStr
 from supabase import Client
 
-from models.user import UserCreate, UserUpdate, UserResponse, UserListResponse, UsernameCheckResponse
+from models.user import (
+    AcceptReferralRequest,
+    UserCreate,
+    UserUpdate,
+    UserResponse,
+    UserListResponse,
+    UsernameCheckResponse,
+)
 from services.database import get_db_client
 from services.user_service import get_user_service, UserService
 
@@ -49,7 +56,14 @@ async def create_user(
             if existing_user:
                 logger.info(f"User with pubkey {user_data.pubkey} already exists, returning existing user")
                 return existing_user
-        return await service.create_user(user_data)
+        created_user = await service.create_user(user_data)
+        if user_data.referrer_code:
+            try:
+                return await service.accept_referral(created_user.pubkey or "", user_data.referrer_code)
+            except ValueError as referral_error:
+                logger.warning(f"User created but referral was not applied: {referral_error}")
+
+        return created_user
     except Exception as e:
         logger.error(f"Failed to create user: {e}")
         raise HTTPException(
@@ -89,36 +103,30 @@ async def list_users(
 
 
 @router.get(
-    "/{user_id}",
-    response_model=UserResponse,
-    summary="Get user by ID",
-    description="Retrieve a specific user by their ID"
+    "/leaderboard",
+    response_model=UserListResponse,
+    summary="Get referral leaderboard",
+    description="Get users ordered by referral activity"
 )
-async def get_user(
-    user_id: int,
+async def get_leaderboard(
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of users to return"),
+    offset: int = Query(0, ge=0, description="Number of users to skip"),
     db: Client = Depends(get_db_client)
 ):
     """
-    Get a user by their ID.
-    
-    - **user_id**: The unique ID of the user
+    Get users for leaderboard displays.
     """
     service = get_user_service(db)
     try:
-        user = await service.get_user(user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_200_OK,
-                detail=f"User with ID {user_id} not found"
-            )
-        return user
-    except HTTPException:
-        raise
+        users = await service.list_users(limit=limit, offset=offset)
+        users = sorted(users, key=lambda user: len(user.referrals or []), reverse=True)
+        total = await service.count_users()
+        return UserListResponse(users=users, total=total)
     except Exception as e:
-        logger.error(f"Failed to get user {user_id}: {e}")
+        logger.error(f"Failed to get leaderboard: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user"
+            detail="Failed to retrieve leaderboard"
         )
 
 
@@ -150,6 +158,72 @@ async def get_user_by_pubkey(
         raise
     except Exception as e:
         logger.error(f"Failed to get user by pubkey {pubkey}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve user"
+        )
+
+
+@router.post(
+    "/accept-referral",
+    response_model=UserResponse,
+    summary="Accept a referral code",
+    description="Attach a referrer to a user and add the user to the referrer's referral list"
+)
+async def accept_referral(
+    referral_data: AcceptReferralRequest,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Accept a referral code for an existing user.
+    """
+    service = get_user_service(db)
+    try:
+        return await service.accept_referral(
+            referral_data.new_user_wallet,
+            referral_data.referrer_code,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Failed to accept referral: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to accept referral"
+        )
+
+
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    summary="Get user by ID",
+    description="Retrieve a specific user by their ID"
+)
+async def get_user(
+    user_id: int,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Get a user by their ID.
+    
+    - **user_id**: The unique ID of the user
+    """
+    service = get_user_service(db)
+    try:
+        user = await service.get_user(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user"

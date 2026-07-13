@@ -197,6 +197,33 @@ async def get_active_subscribed_streams():
 
 
 @router.get(
+    "/by-creator/{creator_id}",
+    response_model=list[ChallengeResponse],
+    summary="Get challenges by creator",
+    description="Retrieve all challenges created by a specific user"
+)
+async def get_challenges_by_creator(
+    creator_id: int,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Get all challenges created by a specific user.
+    
+    - **creator_id**: The ID of the user who created the challenges
+    """
+    service = get_challenge_service(db)
+    try:
+        challenges = await service.get_challenges_by_creator(creator_id)
+        return challenges
+    except Exception as e:
+        logger.error(f"Failed to get challenges by creator {creator_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve challenges"
+        )
+
+
+@router.get(
     "/{challenge_id}",
     response_model=ChallengeResponse,
     summary="Get challenge by ID",
@@ -227,33 +254,6 @@ async def get_challenge(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve challenge"
-        )
-
-
-@router.get(
-    "/by-creator/{creator_id}",
-    response_model=list[ChallengeResponse],
-    summary="Get challenges by creator",
-    description="Retrieve all challenges created by a specific user"
-)
-async def get_challenges_by_creator(
-    creator_id: int,
-    db: Client = Depends(get_db_client)
-):
-    """
-    Get all challenges created by a specific user.
-    
-    - **creator_id**: The ID of the user who created the challenges
-    """
-    service = get_challenge_service(db)
-    try:
-        challenges = await service.get_challenges_by_creator(creator_id)
-        return challenges
-    except Exception as e:
-        logger.error(f"Failed to get challenges by creator {creator_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve challenges"
         )
 
 

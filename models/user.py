@@ -15,11 +15,14 @@ class UserBase(BaseModel):
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
+    referral_code: Optional[str] = Field(None, description="User's referral code")
+    referred_by: Optional[str] = Field(None, description="Referral code used by this user")
+    referrals: list[str] = Field(default_factory=list, description="Wallets referred by this user")
 
 
 class UserCreate(UserBase):
     """Model for creating a new user"""
-    pass
+    referrer_code: Optional[str] = Field(None, description="Referral code to apply after creating the user")
 
 
 class UserUpdate(BaseModel):
@@ -50,3 +53,9 @@ class UsernameCheckResponse(BaseModel):
     """Model for username existence check response"""
     username: str = Field(..., description="The username that was checked")
     exists: bool = Field(..., description="Whether the username is already taken")
+
+
+class AcceptReferralRequest(BaseModel):
+    """Model for accepting a referral code"""
+    new_user_wallet: str = Field(..., description="Wallet/public key of the user accepting the referral")
+    referrer_code: str = Field(..., description="Referral code provided by the referrer")
