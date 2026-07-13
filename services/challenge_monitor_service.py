@@ -9,7 +9,7 @@ and updates challenge statuses when:
 
 import asyncio
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from datetime import datetime, date
 
 import aiohttp
@@ -21,10 +21,13 @@ from services.binance_ws_client import (
     stop_binance_ws_client,
 )
 from services.challenge_service import ChallengeService
+from services.category_service import CategoryService
 from services.database import get_db_client
 from models.challenge import ChallengeStatus, ChallengeBase
 
 logger = logging.getLogger(__name__)
+
+CRYPTO_PARENT_CATEGORY = "Crypto"
 
 
 class ChallengeMonitorService:
@@ -44,6 +47,7 @@ class ChallengeMonitorService:
         self._symbol_challenges: Dict[str, Set[int]] = {}
         self._lock = asyncio.Lock()
         self._challenge_service = None
+        self._category_service = None
         self._ws_client = None
 
     def _get_challenge_service(self) -> ChallengeService:
@@ -52,6 +56,26 @@ class ChallengeMonitorService:
             db_client = get_db_client()
             self._challenge_service = ChallengeService(db_client)
         return self._challenge_service
+
+    def _get_category_service(self) -> CategoryService:
+        """Lazy initialization of category service"""
+        if self._category_service is None:
+            self._category_service = CategoryService(get_db_client())
+        return self._category_service
+
+    def _is_crypto_category(self, category_name: Optional[str]) -> bool:
+        """
+        Check whether a challenge's category is a child of the "Crypto"
+        parent category. Only such challenges should be tracked on the
+        Binance WebSocket (e.g. sports categories reuse the same price-target
+        monitoring fields with non-Binance symbols like team names).
+        """
+        if not category_name:
+            return False
+        category = self._get_category_service().get_category_by_name(category_name)
+        if not category:
+            return False
+        return category.get("parent_category") == CRYPTO_PARENT_CATEGORY
 
     async def start(self):
         """Start the challenge monitor service"""
@@ -105,7 +129,16 @@ class ChallengeMonitorService:
         target = challenge["target"]
         direction = challenge["direction"]
         resolution_date = challenge.get("resolution_date")
-        
+        category = challenge.get("category")
+
+        # Only track assets on Binance for challenges under the "Crypto" parent category
+        if not self._is_crypto_category(category):
+            logger.info(
+                f"Challenge {challenge_id} category '{category}' is not under parent "
+                f"'{CRYPTO_PARENT_CATEGORY}', skipping Binance monitoring"
+            )
+            return
+
         # Check if challenge has already reached resolution_date
         if resolution_date:
             res_date = resolution_date if isinstance(resolution_date, date) else datetime.fromisoformat(resolution_date).date()

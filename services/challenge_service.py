@@ -8,6 +8,7 @@ from typing import Optional
 from supabase import Client
 
 from models.challenge import ChallengeCreate, ChallengeUpdate, ChallengeResponse, ChallengeStatus
+from services.category_service import CategoryService
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,13 @@ class ChallengeService:
             
             created_challenge = result.data[0]
             logger.info(f"Created challenge with ID: {created_challenge['id']}")
+
+            if created_challenge.get("category"):
+                try:
+                    CategoryService(self.db).increment_challenges_count(created_challenge["category"])
+                except Exception as e:
+                    logger.warning(f"Failed to increment challenges_count for category '{created_challenge['category']}': {e}")
+
             return ChallengeResponse(**created_challenge)
             
         except Exception as e:
@@ -253,11 +261,19 @@ class ChallengeService:
                 .eq("id", challenge_id)
                 .execute()
             )
-            
+
             if result.data:
                 logger.info(f"Deleted challenge with ID: {challenge_id}")
+
+                deleted_challenge = result.data[0]
+                if deleted_challenge.get("category"):
+                    try:
+                        CategoryService(self.db).decrement_challenges_count(deleted_challenge["category"])
+                    except Exception as e:
+                        logger.warning(f"Failed to decrement challenges_count for category '{deleted_challenge['category']}': {e}")
+
                 return True
-            
+
             return False
             
         except Exception as e:

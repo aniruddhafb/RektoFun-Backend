@@ -11,6 +11,7 @@ from models.position import PositionCreate, PositionUpdate, PositionResponse, Si
 from models.challenge import ChallengeUpdate
 from services.challenge_service import get_challenge_service
 from services.user_service import get_user_service
+from services.category_service import CategoryService
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,9 @@ class PositionService:
                 position.challenge_id,
                 ChallengeUpdate(bet_info=bet_info)
             )
+
+            if challenge.category and bet:
+                CategoryService(self.db).increment_volume(challenge.category, bet)
         except Exception as e:
             logger.error(f"Failed to update bet_info for challenge {position.challenge_id}: {e}")
 
