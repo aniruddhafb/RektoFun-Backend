@@ -131,6 +131,7 @@ async def create_challenge(
 async def list_challenges(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of challenges to return"),
     offset: int = Query(0, ge=0, description="Number of challenges to skip"),
+    resolution_source: Optional[str] = Query(None, description="Filter by resolution source"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -138,11 +139,16 @@ async def list_challenges(
     
     - **limit**: Maximum number of challenges to return (default: 100, max: 1000)
     - **offset**: Number of challenges to skip for pagination (default: 0)
+    - **resolution_source**: Optional resolution source filter (for example, PRICE_FEED)
     """
     service = get_challenge_service(db)
     try:
-        challenges = await service.list_challenges(limit=limit, offset=offset)
-        total = await service.count_challenges()
+        challenges = await service.list_challenges(
+            limit=limit,
+            offset=offset,
+            resolution_source=resolution_source,
+        )
+        total = await service.count_challenges(resolution_source=resolution_source)
         return ChallengeListResponse(challenges=challenges, total=total)
     except Exception as e:
         logger.error(f"Failed to list challenges: {e}")
