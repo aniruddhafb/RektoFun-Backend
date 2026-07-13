@@ -14,6 +14,7 @@ from models.challenge import (
     ChallengeUpdate,
     ChallengeResponse,
     ChallengeListResponse,
+    ChallengeViewResponse,
     ChallengeStatus,
     Direction
 )
@@ -259,6 +260,35 @@ async def get_challenge(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve challenge"
+        )
+
+
+@router.post(
+    "/{challenge_id}/view",
+    response_model=ChallengeViewResponse,
+    summary="Record a challenge view",
+    description="Atomically increment the view count when challenge details are opened"
+)
+async def record_challenge_view(
+    challenge_id: int,
+    db: Client = Depends(get_db_client)
+):
+    service = get_challenge_service(db)
+    try:
+        views = await service.increment_views(challenge_id)
+        if views is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Challenge with ID {challenge_id} not found"
+            )
+        return ChallengeViewResponse(challenge_id=challenge_id, views=views)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to record view for challenge {challenge_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to record challenge view"
         )
 
 

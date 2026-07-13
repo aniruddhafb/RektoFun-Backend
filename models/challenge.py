@@ -100,6 +100,7 @@ class ChallengeUpdate(BaseModel):
 class ChallengeResponse(ChallengeBase):
     """Model for challenge response data"""
     id: int = Field(..., description="Unique challenge ID")
+    views: int = Field(0, ge=0, description="Number of times the challenge detail was opened")
     created_at: datetime = Field(..., description="Challenge creation timestamp")
     resolved_at: Optional[datetime] = Field(None, description="Exact UTC resolution timestamp")
     creator_details: Optional[UserResponse] = Field(None, description="Details of the user who created the challenge")
@@ -112,3 +113,9 @@ class ChallengeListResponse(BaseModel):
     """Model for list of challenges response"""
     challenges: list[ChallengeResponse]
     total: int = Field(..., description="Total number of challenges")
+
+
+class ChallengeViewResponse(BaseModel):
+    """Response returned after recording a challenge view."""
+    challenge_id: int = Field(..., description="Viewed challenge ID")
+    views: int = Field(..., ge=0, description="Updated challenge view count")
