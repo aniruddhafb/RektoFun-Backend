@@ -134,6 +134,7 @@ class ChallengeMonitorService:
                 "challenge_pda": onchain_meta.get("challenge_pda"),
                 "creator_wallet": onchain_meta.get("creator_wallet"),
                 "challenger_wallet": onchain_meta.get("challenger_wallet"),
+                "pool_size": challenge.get("pool_size"),
             }
             
             # Track which challenges use this symbol
@@ -316,7 +317,7 @@ class ChallengeMonitorService:
         winner_wallet: str,
         creator_wins: bool,
         mode: str,
-    ) -> None:
+    ) -> bool:
         """
         POST to the settlement service to settle the challenge on-chain.
         Failures are logged but do NOT affect the DB status.
@@ -327,7 +328,7 @@ class ChallengeMonitorService:
             logger.warning(
                 f"SETTLEMENT_API not configured — skipping on-chain settlement for challenge {challenge_id}"
             )
-            return
+            return False
 
         # TEAM (mode "TEAM" or "MULTI"): settlement API expects creator for both
         # challenger and winner; individual winners claim via claim_winnings separately.
@@ -355,6 +356,19 @@ class ChallengeMonitorService:
                             f"On-chain settlement succeeded for challenge {challenge_id}: "
                             f"tx={body.get('signature')}"
                         )
+                        if mode == "PVP":
+                            from services.referral_service import ReferralService
+                            challenge = self._get_challenge_service().db.table("challenge").select("pool_size").eq("id", challenge_id).single().execute()
+                            pool_size = (challenge.data or {}).get("pool_size")
+                            referral_service = ReferralService(self._get_challenge_service().db)
+                            referral_service.credit_pvp_participant(
+                                challenge_id, creator_wallet, pool_size
+                            )
+                            if challenger_wallet:
+                                referral_service.credit_pvp_participant(
+                                    challenge_id, challenger_wallet, pool_size
+                                )
+                        return True
                     else:
                         logger.error(
                             f"Settlement service rejected challenge {challenge_id}: "
@@ -362,6 +376,7 @@ class ChallengeMonitorService:
                         )
         except Exception as exc:
             logger.error(f"Settlement service call failed for challenge {challenge_id}: {exc}")
+        return False
 
     async def handle_expired_challenges(self):
         """
