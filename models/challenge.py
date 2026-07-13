@@ -2,11 +2,12 @@
 Challenge models for request/response validation and data transfer.
 """
 
+import re
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from models.user import UserResponse
 
@@ -70,7 +71,23 @@ class ChallengeBase(BaseModel):
 
 class ChallengeCreate(ChallengeBase):
     """Model for creating a new challenge"""
-    pass
+
+    @field_validator("statement")
+    @classmethod
+    def remove_will_be_from_statement(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+
+        statement = re.sub(r"\bwill\s+be\b", "", value, flags=re.IGNORECASE)
+        return re.sub(r"\s{2,}", " ", statement).strip()
+
+    @field_validator("ticker")
+    @classmethod
+    def store_base_ticker_only(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+
+        return value.split("/", 1)[0].strip().upper()
 
 
 class ChallengeUpdate(BaseModel):
