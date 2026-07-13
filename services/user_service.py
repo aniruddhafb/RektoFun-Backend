@@ -315,15 +315,23 @@ class UserService:
             if not new_user:
                 raise ValueError("User accepting referral was not found")
 
+            # Referral attribution is immutable. Retried requests, or requests
+            # carrying a different code for an already-referred user, are a
+            # successful no-op and must never replace the original referrer.
+            if new_user.referred_by:
+                logger.info(
+                    "Skipping referral %s for user %s; referrer is already attached",
+                    normalized_code,
+                    new_user.id,
+                )
+                return new_user
+
             referrer = await self.get_user_by_referral_code(normalized_code)
             if not referrer:
                 raise ValueError("Referral code not found")
 
             if new_user.pubkey == referrer.pubkey:
                 raise ValueError("You cannot redeem your own referral code")
-
-            if new_user.referred_by:
-                raise ValueError("Referral code already redeemed")
 
             referrals = list(referrer.referrals or [])
             if new_user.pubkey and new_user.pubkey not in referrals:
