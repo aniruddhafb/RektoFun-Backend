@@ -11,18 +11,32 @@ from supabase import Client
 
 from models.user import (
     AcceptReferralRequest,
+    ReferralRedemptionRequest,
+    ReferralHistoryResponse,
+    FollowRequest,
     UserCreate,
     UserUpdate,
     UserResponse,
     UserListResponse,
+    LeaderboardResponse,
     UsernameCheckResponse,
 )
 from services.database import get_db_client
 from services.user_service import get_user_service, UserService
+from services.leaderboard_service import LeaderboardService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _is_username_unique_violation(error: Exception) -> bool:
+    """Identify the PostgreSQL unique-index error as a race-condition fallback."""
+    error_text = str(error).lower()
+    return (
+        "user_username_unique_idx" in error_text
+        or ("duplicate key" in error_text and "username" in error_text)
+    )
 
 
 @router.post(
@@ -56,6 +70,11 @@ async def create_user(
             if existing_user:
                 logger.info(f"User with pubkey {user_data.pubkey} already exists, returning existing user")
                 return existing_user
+        if user_data.username and await service.username_exists(user_data.username):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken"
+            )
         created_user = await service.create_user(user_data)
         if user_data.referrer_code:
             try:
@@ -64,8 +83,15 @@ async def create_user(
                 logger.warning(f"User created but referral was not applied: {referral_error}")
 
         return created_user
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create user: {e}")
+        if _is_username_unique_violation(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken"
+            ) from e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user"
@@ -104,24 +130,27 @@ async def list_users(
 
 @router.get(
     "/leaderboard",
-    response_model=UserListResponse,
-    summary="Get referral leaderboard",
-    description="Get users ordered by referral activity"
+    response_model=LeaderboardResponse,
+    summary="Get challenge performance leaderboard",
+    description="Get realized wins, losses, P&L and volume for resolved challenges"
 )
 async def get_leaderboard(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of users to return"),
     offset: int = Query(0, ge=0, description="Number of users to skip"),
+    period: str = Query("all", pattern="^(1d|7d|30d|all)$"),
+    search: Optional[str] = Query(None, max_length=100),
+    sort: str = Query("pnl", pattern="^(rank|win_rate|won|lost|pnl|volume)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     db: Client = Depends(get_db_client)
 ):
     """
     Get users for leaderboard displays.
     """
-    service = get_user_service(db)
     try:
-        users = await service.list_users(limit=limit, offset=offset)
-        users = sorted(users, key=lambda user: len(user.referrals or []), reverse=True)
-        total = await service.count_users()
-        return UserListResponse(users=users, total=total)
+        return await LeaderboardService(db).get_leaderboard(
+            period=period, limit=limit, offset=offset, search=search,
+            sort=sort, order=order,
+        )
     except Exception as e:
         logger.error(f"Failed to get leaderboard: {e}")
         raise HTTPException(
@@ -194,6 +223,68 @@ async def accept_referral(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to accept referral"
         )
+
+
+@router.post("/referral-redemptions", response_model=UserResponse)
+async def request_referral_redemption(
+    redemption: ReferralRedemptionRequest,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).request_referral_redemption(redemption.wallet_address)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to create referral redemption request: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create redemption request")
+
+
+@router.get("/referral-history/{wallet_address}", response_model=ReferralHistoryResponse)
+async def get_referral_history(
+    wallet_address: str,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).get_referral_history(wallet_address)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to load referral history: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load referral history")
+
+
+@router.post("/{target_wallet}/follow", response_model=UserResponse)
+async def follow_user(
+    target_wallet: str,
+    follow_data: FollowRequest,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).set_following(
+            follow_data.follower_wallet, target_wallet, follow=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to follow user {target_wallet}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to follow user")
+
+
+@router.delete("/{target_wallet}/follow", response_model=UserResponse)
+async def unfollow_user(
+    target_wallet: str,
+    follow_data: FollowRequest,
+    db: Client = Depends(get_db_client),
+):
+    try:
+        return await get_user_service(db).set_following(
+            follow_data.follower_wallet, target_wallet, follow=False
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to unfollow user {target_wallet}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unfollow user")
 
 
 @router.get(
@@ -314,6 +405,14 @@ async def update_user(
     """
     service = get_user_service(db)
     try:
+        if user_data.username:
+            existing_user = await service.get_user_by_username(user_data.username)
+            if existing_user and existing_user.id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This username is already taken"
+                )
+
         user = await service.update_user(user_id, user_data)
         if not user:
             raise HTTPException(
@@ -325,6 +424,11 @@ async def update_user(
         raise
     except Exception as e:
         logger.error(f"Failed to update user {user_id}: {e}")
+        if _is_username_unique_violation(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken"
+            ) from e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user"

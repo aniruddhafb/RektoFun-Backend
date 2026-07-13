@@ -199,7 +199,7 @@ class UserService:
             result = (
                 self.db.table(self.table)
                 .select("*")
-                .eq("username", username)
+                .ilike("username", username)
                 .execute()
             )
 
@@ -278,7 +278,10 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            data = user_data.model_dump(exclude_unset=True, exclude_none=True)
+            # Keep explicitly provided null values so nullable profile fields can
+            # be cleared (for example, disconnecting a linked X account).
+            # exclude_unset still prevents omitted fields from being overwritten.
+            data = user_data.model_dump(exclude_unset=True)
             
             if not data:
                 logger.warning("No data provided for user update")
@@ -339,6 +342,71 @@ class UserService:
         except Exception as e:
             logger.error(f"Error accepting referral: {e}")
             raise
+
+    async def set_following(
+        self, follower_wallet: str, target_wallet: str, *, follow: bool
+    ) -> UserResponse:
+        """Atomically follow or unfollow a user and return the updated target."""
+        follower = await self.get_user_by_pubkey(follower_wallet)
+        target = await self.get_user_by_pubkey(target_wallet)
+        if not follower or not target:
+            raise ValueError("Follower or target user was not found")
+        if follower.id == target.id:
+            raise ValueError("You cannot follow yourself")
+
+        self.db.rpc(
+            "set_user_following",
+            {
+                "p_follower_id": follower.id,
+                "p_target_id": target.id,
+                "p_follow": follow,
+            },
+        ).execute()
+        updated_target = await self.get_user(target.id)
+        if not updated_target:
+            raise Exception("Failed to load user after follow action")
+        return updated_target
+
+    async def request_referral_redemption(self, wallet_address: str) -> UserResponse:
+        """Atomically snapshot redeemable earnings and reset the user's balance."""
+        result = self.db.rpc(
+            "request_referral_redemption",
+            {"p_wallet_address": wallet_address},
+        ).execute()
+        if not result.data:
+            raise ValueError("At least 5 USDC is required to redeem")
+
+        updated_user = await self.get_user_by_pubkey(wallet_address)
+        if not updated_user:
+            raise Exception("Failed to load user after redemption request")
+        return updated_user
+
+    async def get_referral_history(self, wallet_address: str) -> dict:
+        """Return sanitized commission and redemption history for a wallet."""
+        user = await self.get_user_by_pubkey(wallet_address)
+        if not user:
+            raise ValueError("User was not found")
+
+        commissions = (
+            self.db.table("referral_commissions")
+            .select("amount,created_at")
+            .eq("referrer_id", user.id)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        redemptions = (
+            self.db.table("referral_redemption_requests")
+            .select("amount,status,requested_at")
+            .eq("user_id", user.id)
+            .order("requested_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        return {
+            "commissions": commissions.data or [],
+            "redemptions": redemptions.data or [],
+        }
 
     async def delete_user(self, user_id: int) -> bool:
         """

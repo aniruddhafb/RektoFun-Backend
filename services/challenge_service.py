@@ -3,6 +3,7 @@ Challenge service for CRUD operations on the challenge table.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from supabase import Client
@@ -83,6 +84,29 @@ class ChallengeService:
             
         except Exception as e:
             logger.error(f"Error fetching challenge {challenge_id}: {e}")
+            raise
+
+    async def increment_views(self, challenge_id: int) -> Optional[int]:
+        """Atomically increment and return a challenge's view count."""
+        try:
+            result = self.db.rpc(
+                "increment_challenge_views",
+                {"p_challenge_id": challenge_id},
+            ).execute()
+
+            data = result.data
+            if isinstance(data, list):
+                if not data:
+                    return None
+                data = data[0]
+            if isinstance(data, dict):
+                data = data.get("views")
+            if data is None:
+                return None
+
+            return int(data)
+        except Exception as e:
+            logger.error(f"Error incrementing views for challenge {challenge_id}: {e}")
             raise
 
     async def get_challenges_by_creator(self, creator_id: int) -> list[ChallengeResponse]:
@@ -353,6 +377,8 @@ class ChallengeService:
             price_to_use = final_price if final_price is not None else end_price
             if new_status == ChallengeStatus.RESOLVED and price_to_use is not None:
                 update_data["final_price"] = round(price_to_use)
+            if new_status == ChallengeStatus.RESOLVED:
+                update_data["resolved_at"] = datetime.now(timezone.utc).isoformat()
             
             # Update in database
             result = (
