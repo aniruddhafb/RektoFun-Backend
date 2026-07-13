@@ -100,8 +100,8 @@ async def create_challenge(
         created_position = await position_service.create_position(position_data)
         print("created_position", created_position)
         # Start monitoring the challenge for price targets
-        # Only monitor if it has a ticker and target price
-        if challenge.ticker and challenge.target:
+        # Only monitor if it has a trading_pair and target price
+        if challenge.trading_pair and challenge.target:
             challenge_dict = challenge.model_dump()
             await monitor_new_challenge(challenge_dict)
             logger.info(f"Started monitoring challenge {challenge.id} for price target")
