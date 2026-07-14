@@ -148,6 +148,23 @@ class CategoryService:
             return response.data[0]
         return None
 
+    def increment_volume(self, category_name: str, amount: int) -> Optional[dict[str, Any]]:
+        """Increment the trading volume for a category"""
+        existing = self.get_category_by_name(category_name)
+        if not existing:
+            return None
+
+        new_volume = (existing.get("volume") or 0) + amount
+        response = (
+            self.supabase.table("category")
+            .update({"volume": new_volume})
+            .eq("category", category_name)
+            .execute()
+        )
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        return None
+
 
 # Singleton instance for use across the application
 _category_service: CategoryService | None = None
