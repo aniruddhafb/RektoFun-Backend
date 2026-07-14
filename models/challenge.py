@@ -66,7 +66,7 @@ class ChallengeBase(BaseModel):
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
     final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
-    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet/twitter_username/user_type, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeCreate(ChallengeBase):
@@ -111,7 +111,7 @@ class ChallengeUpdate(BaseModel):
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
     final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
-    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet/twitter_username/user_type, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeResponse(ChallengeBase):
@@ -120,6 +120,7 @@ class ChallengeResponse(ChallengeBase):
     views: int = Field(0, ge=0, description="Number of times the challenge detail was opened")
     created_at: datetime = Field(..., description="Challenge creation timestamp")
     resolved_at: Optional[datetime] = Field(None, description="Exact UTC resolution timestamp")
+    category_image: Optional[str] = Field(None, description="Image associated with the challenge category")
     creator_details: Optional[UserResponse] = Field(None, description="Details of the user who created the challenge")
 
     class Config:

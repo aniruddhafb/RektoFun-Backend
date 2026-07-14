@@ -102,6 +102,8 @@ class PositionService:
                     "profile_image": user.profile_image,
                     "pubkey": user.pubkey,
                     "bet": bet,
+                    "twitter_username": user.twitter_username,
+                    "user_type": user.user_type,
                 }
                 bet_info["highest_bet"] = highest_bet
 
