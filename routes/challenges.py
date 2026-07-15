@@ -132,6 +132,7 @@ async def list_challenges(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of challenges to return"),
     offset: int = Query(0, ge=0, description="Number of challenges to skip"),
     resolution_source: Optional[str] = Query(None, description="Filter by resolution source"),
+    created_by: Optional[int] = Query(None, description="Filter by creator user ID"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -147,8 +148,9 @@ async def list_challenges(
             limit=limit,
             offset=offset,
             resolution_source=resolution_source,
+            creator_id=created_by,
         )
-        total = await service.count_challenges(resolution_source=resolution_source)
+        total = await service.count_challenges(resolution_source=resolution_source, creator_id=created_by)
         return ChallengeListResponse(challenges=challenges, total=total)
     except Exception as e:
         logger.error(f"Failed to list challenges: {e}")

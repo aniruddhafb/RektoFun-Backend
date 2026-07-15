@@ -195,6 +195,7 @@ class ChallengeService:
         limit: int = 100,
         offset: int = 0,
         resolution_source: str | None = None,
+        creator_id: int | None = None,
     ) -> list[ChallengeResponse]:
         """
         List challenges with pagination.
@@ -215,7 +216,9 @@ class ChallengeService:
             )
             if resolution_source:
                 query = query.ilike("resolution_source", resolution_source)
-            result = query.range(offset, offset + limit - 1).execute()
+            if creator_id is not None:
+                query = query.eq("creator", creator_id)
+            result = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
 
             return [ChallengeResponse(**challenge) for challenge in result.data]
 
@@ -305,7 +308,7 @@ class ChallengeService:
             logger.error(f"Error deleting challenge {challenge_id}: {e}")
             raise
 
-    async def count_challenges(self, resolution_source: str | None = None) -> int:
+    async def count_challenges(self, resolution_source: str | None = None, creator_id: int | None = None) -> int:
         """
         Get total count of challenges.
         
@@ -319,6 +322,8 @@ class ChallengeService:
             query = self.db.table(self.table).select("*", count="exact")
             if resolution_source:
                 query = query.ilike("resolution_source", resolution_source)
+            if creator_id is not None:
+                query = query.eq("creator", creator_id)
             result = query.execute()
             
             return result.count or 0
