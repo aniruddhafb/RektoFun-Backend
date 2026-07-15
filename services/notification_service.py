@@ -46,6 +46,32 @@ class NotificationService:
             # A notification failure must never roll back a paid challenge action.
             logger.error("Failed to notify followers for user %s: %s", actor_id, error)
 
+    async def notify_user_followed(
+        self, actor_id: int, recipient_id: int, *, followed_back: bool = False
+    ) -> None:
+        """Notify a user that another user started following them."""
+        try:
+            actor_result = self.db.table("user").select("username").eq("id", actor_id).limit(1).execute()
+            if not actor_result.data:
+                return
+            actor_name = actor_result.data[0].get("username") or "Someone"
+            event_type = "user_followed_back" if followed_back else "user_followed"
+            action = "followed you back" if followed_back else "followed you"
+            row = {
+                "recipient_id": recipient_id,
+                "actor_id": actor_id,
+                "challenge_id": None,
+                "event_type": event_type,
+                "message": f"{actor_name} {action}.",
+                "event_key": f"{event_type}:{actor_id}:{recipient_id}",
+            }
+            self.db.table("notification").upsert(
+                row, on_conflict="event_key", ignore_duplicates=True
+            ).execute()
+        except Exception as error:
+            # Following should still succeed if a notification cannot be created.
+            logger.error("Failed to notify user %s about follower %s: %s", recipient_id, actor_id, error)
+
     async def list_for_wallet(self, wallet: str, limit: int = 50) -> NotificationListResponse:
         user_result = self.db.table("user").select("id").eq("pubkey", wallet).limit(1).execute()
         if not user_result.data:

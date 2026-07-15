@@ -10,6 +10,7 @@ from typing import Optional
 from supabase import Client
 
 from models.user import UserCreate, UserUpdate, UserResponse
+from services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,13 @@ class UserService:
         if follower.id == target.id:
             raise ValueError("You cannot follow yourself")
 
+        was_following = any(
+            str(user_id) == str(follower.id) for user_id in (target.followers or [])
+        )
+        is_following_back = any(
+            str(user_id) == str(target.id) for user_id in (follower.followers or [])
+        )
+
         self.db.rpc(
             "set_user_following",
             {
@@ -370,6 +378,10 @@ class UserService:
                 "p_follow": follow,
             },
         ).execute()
+        if follow and not was_following:
+            await NotificationService(self.db).notify_user_followed(
+                follower.id, target.id, followed_back=is_following_back
+            )
         updated_target = await self.get_user(target.id)
         if not updated_target:
             raise Exception("Failed to load user after follow action")
