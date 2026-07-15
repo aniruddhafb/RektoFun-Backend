@@ -107,10 +107,33 @@ class PositionService:
                 }
                 bet_info["highest_bet"] = highest_bet
 
+            # For PVP challenges, the challenger's wallet is only known once
+            # they join (the creator sets challenge_pda/creator_wallet at
+            # creation, but no one records the opponent's wallet anywhere
+            # else). Persist it here so the settlement flow can find it once
+            # the target is hit.
+            metadata = None
+            challenger_wallet = None
+            if (
+                challenge.mode == "PVP"
+                and position.creator != challenge.creator
+                and user.pubkey
+            ):
+                onchain_meta = dict((challenge.metadata or {}).get("onchain") or {})
+                if not onchain_meta.get("challenger_wallet"):
+                    onchain_meta["challenger_wallet"] = user.pubkey
+                    metadata = dict(challenge.metadata or {})
+                    metadata["onchain"] = onchain_meta
+                    challenger_wallet = user.pubkey
+
             await challenge_service.update_challenge(
                 position.challenge_id,
-                ChallengeUpdate(bet_info=bet_info)
+                ChallengeUpdate(bet_info=bet_info, metadata=metadata)
             )
+
+            if challenger_wallet:
+                from services.challenge_monitor_service import update_monitored_challenger_wallet
+                await update_monitored_challenger_wallet(position.challenge_id, challenger_wallet)
 
             if challenge.category and bet:
                 CategoryService(self.db).increment_volume(challenge.category, bet)

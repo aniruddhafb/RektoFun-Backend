@@ -12,6 +12,17 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# ANSI colors so Binance WS activity is visually distinct in the console.
+_COLOR_INFO = "\033[36m"    # cyan - connections/subscriptions
+_COLOR_WARN = "\033[33m"    # yellow
+_COLOR_ERROR = "\033[31m"   # red
+_COLOR_DEBUG = "\033[90m"   # grey
+_COLOR_RESET = "\033[0m"
+
+
+def _c(color: str, text: str) -> str:
+    return f"{color}{text}{_COLOR_RESET}"
+
 
 @dataclass
 class PriceUpdate:
@@ -50,7 +61,7 @@ class BinanceWebSocketClient:
             try:
                 await self._connect()
             except Exception as e:
-                logger.error(f"WebSocket error: {e}")
+                logger.error(_c(_COLOR_ERROR, f"WebSocket error: {e}"))
                 await asyncio.sleep(self._reconnect_delay)
                 # Exponential backoff
                 self._reconnect_delay = min(
@@ -60,7 +71,7 @@ class BinanceWebSocketClient:
 
     async def _connect(self):
         """Establish WebSocket connection and handle messages"""
-        logger.info("Connecting to Binance WebSocket")
+        logger.info(_c(_COLOR_INFO, "Connecting to Binance WebSocket"))
 
         try:
             async with websockets.connect(self.BINANCE_WS_URL) as websocket:
@@ -78,10 +89,10 @@ class BinanceWebSocketClient:
                     await self._handle_message(message)
 
         except websockets.exceptions.ConnectionClosed:
-            logger.warning("WebSocket connection closed")
+            logger.warning(_c(_COLOR_WARN, "WebSocket connection closed"))
             raise
         except Exception as e:
-            logger.error(f"WebSocket error: {e}")
+            logger.error(_c(_COLOR_ERROR, f"WebSocket error: {e}"))
             raise
 
     async def _send_subscribe(self, symbols: list[str]):
@@ -99,9 +110,9 @@ class BinanceWebSocketClient:
 
         try:
             await self._websocket.send(json.dumps(message))
-            logger.info(f"Subscribed to streams: {params}")
+            logger.info(_c(_COLOR_INFO, f"Subscribed to streams: {params}"))
         except Exception as e:
-            logger.error(f"Failed to send subscribe message: {e}")
+            logger.error(_c(_COLOR_ERROR, f"Failed to send subscribe message: {e}"))
             raise
 
     async def _send_unsubscribe(self, symbols: list[str]):
@@ -119,9 +130,9 @@ class BinanceWebSocketClient:
 
         try:
             await self._websocket.send(json.dumps(message))
-            logger.info(f"Unsubscribed from streams: {params}")
+            logger.info(_c(_COLOR_INFO, f"Unsubscribed from streams: {params}"))
         except Exception as e:
-            logger.error(f"Failed to send unsubscribe message: {e}")
+            logger.error(_c(_COLOR_ERROR, f"Failed to send unsubscribe message: {e}"))
             raise
 
     async def _handle_message(self, message: str):
@@ -160,7 +171,7 @@ class BinanceWebSocketClient:
                         if asyncio.iscoroutine(result):
                             asyncio.create_task(result)
                     except Exception as e:
-                        logger.error(f"Error in price callback for {symbol}: {e}")
+                        logger.error(_c(_COLOR_ERROR, f"Error in price callback for {symbol}: {e}"))
 
             # Handle combined stream wrapper
             elif "data" in data:
@@ -196,12 +207,12 @@ class BinanceWebSocketClient:
 
             # Handle subscription response
             elif "id" in data and "result" in data:
-                logger.debug(f"Subscription response: {data}")
+                logger.debug(_c(_COLOR_DEBUG, f"Subscription response: {data}"))
 
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse WebSocket message: {e}")
+            logger.error(_c(_COLOR_ERROR, f"Failed to parse WebSocket message: {e}"))
         except Exception as e:
-            logger.error(f"Error handling message: {e}")
+            logger.error(_c(_COLOR_ERROR, f"Error handling message: {e}"))
 
     async def subscribe(self, symbol: str, callback: Callable[[PriceUpdate], None]):
         """
@@ -220,7 +231,7 @@ class BinanceWebSocketClient:
             self._callbacks[symbol_upper] = callback
 
         if is_new_symbol:
-            logger.info(f"Subscribed to {symbol_upper}")
+            logger.info(_c(_COLOR_INFO, f"Subscribed to {symbol_upper}"))
             # Send live subscribe message instead of reconnecting
             if self._websocket:
                 await self._send_subscribe([symbol_upper])
@@ -233,7 +244,7 @@ class BinanceWebSocketClient:
             if symbol_upper in self._subscribed_symbols:
                 self._subscribed_symbols.discard(symbol_upper)
                 self._callbacks.pop(symbol_upper, None)
-                logger.info(f"Unsubscribed from {symbol_upper}")
+                logger.info(_c(_COLOR_INFO, f"Unsubscribed from {symbol_upper}"))
 
                 # Send live unsubscribe message instead of reconnecting
                 if self._websocket:
@@ -249,7 +260,7 @@ class BinanceWebSocketClient:
         if self._websocket:
             await self._websocket.close()
             self._websocket = None
-        logger.info("Binance WebSocket client stopped")
+        logger.info(_c(_COLOR_INFO, "Binance WebSocket client stopped"))
 
 
 # Global WebSocket client instance
