@@ -18,7 +18,15 @@ class NotificationService:
             if not actor_result.data:
                 return
             actor_name = actor_result.data[0].get("username") or "A user you follow"
-            followers = self.db.table("user").select("id").contains("following", [actor_id]).execute()
+            # postgrest-py 0.16 (used by supabase 2.7) joins array filter
+            # values as strings. Passing an int raises TypeError before the
+            # request is sent, which previously got swallowed by this method.
+            followers = (
+                self.db.table("user")
+                .select("id")
+                .contains("following", [str(actor_id)])
+                .execute()
+            )
             verb = "created" if event_type == "challenge_created" else "joined"
             rows = [
                 {
@@ -45,7 +53,7 @@ class NotificationService:
         recipient_id = user_result.data[0]["id"]
         result = (
             self.db.table("notification")
-            .select("*, actor:user!notification_actor_id_fkey(username, profile_image)")
+            .select("*, actor:user!notification_actor_id_fkey(username, profile_image, pubkey)")
             .eq("recipient_id", recipient_id)
             .order("created_at", desc=True)
             .limit(limit)
@@ -58,6 +66,7 @@ class NotificationService:
                 **row,
                 actor_username=actor.get("username"),
                 actor_profile_image=actor.get("profile_image"),
+                actor_wallet_address=actor.get("pubkey"),
             ))
         unread = sum(1 for item in notifications if not item.is_read)
         return NotificationListResponse(notifications=notifications, unread_count=unread)

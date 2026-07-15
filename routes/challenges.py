@@ -15,12 +15,13 @@ from models.challenge import (
     ChallengeResponse,
     ChallengeListResponse,
     ChallengeViewResponse,
+    ChallengeAvailabilityResponse,
     ChallengeStatus,
     Direction
 )
 from models.position import PositionCreate, Side
 from services.database import get_db_client
-from services.challenge_service import get_challenge_service, ChallengeService
+from services.challenge_service import get_challenge_service, ChallengeService, DuplicateChallengeError
 from services.position_service import get_position_service
 from services.notification_service import get_notification_service
 from services.challenge_monitor_service import (
@@ -32,6 +33,15 @@ from services.challenge_monitor_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/challenges", tags=["challenges"])
+
+
+@router.post("/availability", response_model=ChallengeAvailabilityResponse)
+async def check_challenge_availability(
+    challenge_data: ChallengeCreate,
+    db: Client = Depends(get_db_client),
+):
+    """Check duplicate rules without creating a challenge."""
+    return await get_challenge_service(db).check_availability(challenge_data)
 
 
 async def verify_cron_api_key(x_api_key: str = Header(..., description="API key for cron job authentication")):
@@ -114,6 +124,11 @@ async def create_challenge(
             
         
         return challenge
+    except DuplicateChallengeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=e.availability.model_dump(mode="json"),
+        )
     except Exception as e:
         logger.error(f"Failed to create challenge: {e}")
         raise HTTPException(
@@ -132,6 +147,12 @@ async def list_challenges(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of challenges to return"),
     offset: int = Query(0, ge=0, description="Number of challenges to skip"),
     resolution_source: Optional[str] = Query(None, description="Filter by resolution source"),
+    created_by: Optional[int] = Query(None, description="Filter by creator user ID"),
+    open_first: bool = Query(False, description="Return OPEN challenges before other statuses"),
+    challenge_status: Optional[ChallengeStatus] = Query(None, alias="status", description="Filter by challenge status"),
+    expiring_soon: bool = Query(False, description="Return only unexpired OPEN challenges, soonest first"),
+    search: Optional[str] = Query(None, min_length=1, max_length=100, description="Search challenge text or ticker"),
+    joinable: bool = Query(False, description="Return only challenges currently open to new participants"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -147,8 +168,21 @@ async def list_challenges(
             limit=limit,
             offset=offset,
             resolution_source=resolution_source,
+            creator_id=created_by,
+            open_first=open_first,
+            status_filter=challenge_status,
+            expiring_soon=expiring_soon,
+            search=search,
+            joinable=joinable,
         )
-        total = await service.count_challenges(resolution_source=resolution_source)
+        total = await service.count_challenges(
+            resolution_source=resolution_source,
+            creator_id=created_by,
+            status_filter=challenge_status,
+            expiring_soon=expiring_soon,
+            search=search,
+            joinable=joinable,
+        )
         return ChallengeListResponse(challenges=challenges, total=total)
     except Exception as e:
         logger.error(f"Failed to list challenges: {e}")
