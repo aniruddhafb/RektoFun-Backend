@@ -289,7 +289,7 @@ class ChallengeMonitorService:
             # legitimately be retried — everything after it is best-effort against
             # an already-committed RESOLVED row, so it must not trigger a re-add.
             service = self._get_challenge_service()
-            await service.update_challenge_status(
+            resolved_challenge = await service.update_challenge_status(
                 challenge_id=challenge_id,
                 new_status=ChallengeStatus.RESOLVED,
                 final_price=hit_price
@@ -316,11 +316,20 @@ class ChallengeMonitorService:
         # and logging are best-effort and must never re-queue the challenge.
         try:
             # Settle on-chain — creator_wins is always True when target is hit
-            # (hitting the target validates the creator's direction prediction)
-            challenge_pda = challenge_data.get("challenge_pda")
-            creator_wallet = challenge_data.get("creator_wallet")
-            challenger_wallet = challenge_data.get("challenger_wallet")
-            mode = challenge_data.get("mode") or "PVP"
+            # (hitting the target validates the creator's direction prediction).
+            # Read onchain fields from the row just fetched from the DB rather
+            # than the in-memory cache: challenger_wallet is only cached at
+            # monitor-start time (creation), and set_challenger_wallet() only
+            # patches the cache in the process that happened to handle the
+            # join request — under Mangum/serverless each invocation can be a
+            # separate process, so that update may never reach the instance
+            # that ends up resolving the challenge. The freshly-updated DB row
+            # is the source of truth.
+            fresh_onchain = (getattr(resolved_challenge, "metadata", None) or {}).get("onchain") or {}
+            challenge_pda = fresh_onchain.get("challenge_pda") or challenge_data.get("challenge_pda")
+            creator_wallet = fresh_onchain.get("creator_wallet") or challenge_data.get("creator_wallet")
+            challenger_wallet = fresh_onchain.get("challenger_wallet") or challenge_data.get("challenger_wallet")
+            mode = (getattr(resolved_challenge, "mode", None) or challenge_data.get("mode") or "PVP")
 
             if mode == "PVP" and not challenger_wallet:
                 # PVP challenge with no challenger is still Open on-chain — the
