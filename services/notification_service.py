@@ -53,7 +53,7 @@ class NotificationService:
         recipient_id = user_result.data[0]["id"]
         result = (
             self.db.table("notification")
-            .select("*, actor:user!notification_actor_id_fkey(username, profile_image)")
+            .select("*, actor:user!notification_actor_id_fkey(username, profile_image, pubkey)")
             .eq("recipient_id", recipient_id)
             .order("created_at", desc=True)
             .limit(limit)
@@ -66,6 +66,7 @@ class NotificationService:
                 **row,
                 actor_username=actor.get("username"),
                 actor_profile_image=actor.get("profile_image"),
+                actor_wallet_address=actor.get("pubkey"),
             ))
         unread = sum(1 for item in notifications if not item.is_read)
         return NotificationListResponse(notifications=notifications, unread_count=unread)
