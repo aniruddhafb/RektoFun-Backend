@@ -61,6 +61,7 @@ async def create_position(
 async def list_positions(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of positions to return"),
     offset: int = Query(0, ge=0, description="Number of positions to skip"),
+    creator: int | None = Query(None, description="Filter by creator user ID"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -71,8 +72,8 @@ async def list_positions(
     """
     service = get_position_service(db)
     try:
-        positions = await service.list_positions(limit=limit, offset=offset)
-        total = await service.count_positions()
+        positions = await service.list_positions(limit=limit, offset=offset, creator_id=creator)
+        total = await service.count_positions(creator_id=creator)
         return PositionListResponse(positions=positions, total=total)
     except Exception as e:
         logger.error(f"Failed to list positions: {e}")
