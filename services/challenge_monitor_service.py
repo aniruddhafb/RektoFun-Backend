@@ -65,13 +65,16 @@ class ChallengeMonitorService:
 
     def _is_crypto_category(self, category_name: Optional[str]) -> bool:
         """
-        Check whether a challenge's category is a child of the "Crypto"
-        parent category. Only such challenges should be tracked on the
-        Binance WebSocket (e.g. sports categories reuse the same price-target
-        monitoring fields with non-Binance symbols like team names).
+        Check whether a challenge's category is the "Crypto" parent category
+        itself or a child of it. Only such challenges should be tracked on
+        the Binance WebSocket (e.g. sports categories reuse the same
+        price-target monitoring fields with non-Binance symbols like team
+        names).
         """
         if not category_name:
             return False
+        if category_name == CRYPTO_PARENT_CATEGORY:
+            return True
         category = self._get_category_service().get_category_by_name(category_name)
         if not category:
             return False
@@ -265,12 +268,13 @@ class ChallengeMonitorService:
         """
         challenge_data = None
         symbol = None
+        should_unsubscribe = False
         try:
             async with self._lock:
                 challenge_data = self._active_challenges.pop(challenge_id, None)
                 if not challenge_data:
                     return  # Already completed or removed
-                
+
                 symbol = challenge_data.get("trading_pair")
                 if symbol:
                     # Remove from symbol mapping
@@ -280,19 +284,37 @@ class ChallengeMonitorService:
                         should_unsubscribe = len(self._symbol_challenges[symbol]) == 0
                         if should_unsubscribe:
                             del self._symbol_challenges[symbol]
-                    else:
-                        should_unsubscribe = False
-                else:
-                    should_unsubscribe = False
-            
-            # Update challenge status in database
+
+            # Update challenge status in database. This is the only step that can
+            # legitimately be retried — everything after it is best-effort against
+            # an already-committed RESOLVED row, so it must not trigger a re-add.
             service = self._get_challenge_service()
             await service.update_challenge_status(
                 challenge_id=challenge_id,
                 new_status=ChallengeStatus.RESOLVED,
                 final_price=hit_price
             )
+        except ValueError as e:
+            # Invalid transition (e.g. already RESOLVED via another path) is
+            # terminal, not transient — retrying will never succeed, so drop
+            # the challenge from monitoring instead of re-adding it.
+            logger.error(f"Error resolving challenge {challenge_id}: {e}")
+            return
+        except Exception as e:
+            logger.error(f"Error resolving challenge {challenge_id}: {e}")
+            # Re-add to active challenges since the DB update itself failed
+            if challenge_data:
+                async with self._lock:
+                    self._active_challenges[challenge_id] = challenge_data
+                    if symbol:
+                        if symbol not in self._symbol_challenges:
+                            self._symbol_challenges[symbol] = set()
+                        self._symbol_challenges[symbol].add(challenge_id)
+            return
 
+        # From here on, the DB row is already RESOLVED — settlement, unsubscribe,
+        # and logging are best-effort and must never re-queue the challenge.
+        try:
             # Settle on-chain — creator_wins is always True when target is hit
             # (hitting the target validates the creator's direction prediction)
             challenge_pda = challenge_data.get("challenge_pda")
@@ -329,17 +351,9 @@ class ChallengeMonitorService:
                 logger.info(f"Unsubscribed from {symbol} - no more challenges using it")
 
             logger.info(f"Challenge {challenge_id} resolved immediately at price {hit_price}")
-            
+
         except Exception as e:
-            logger.error(f"Error resolving challenge {challenge_id}: {e}")
-            # Re-add to active challenges if update failed
-            if challenge_data:
-                async with self._lock:
-                    self._active_challenges[challenge_id] = challenge_data
-                    if symbol:
-                        if symbol not in self._symbol_challenges:
-                            self._symbol_challenges[symbol] = set()
-                        self._symbol_challenges[symbol].add(challenge_id)
+            logger.error(f"Error settling challenge {challenge_id} on-chain after DB resolve: {e}")
 
     async def _call_settlement_service(
         self,
@@ -677,6 +691,21 @@ class ChallengeMonitorService:
         """Get list of currently monitored active challenges"""
         return list(self._active_challenges.values())
 
+    async def set_challenger_wallet(self, challenge_id: int, challenger_wallet: str):
+        """
+        Update the cached challenger_wallet for a challenge already being monitored.
+
+        The onchain metadata is only captured once, when monitoring starts
+        (creation time or service boot) — PVP challenges have no challenger
+        yet at that point, so this must be called once an opponent joins to
+        avoid `_resolve_challenge_immediately` treating the challenge as
+        unopposed forever.
+        """
+        async with self._lock:
+            challenge_data = self._active_challenges.get(challenge_id)
+            if challenge_data:
+                challenge_data["challenger_wallet"] = challenger_wallet
+
 
 # Global monitor service instance
 _challenge_monitor: ChallengeMonitorService | None = None
@@ -720,3 +749,12 @@ async def stop_monitoring_challenge(challenge_id: int):
     """
     monitor = get_challenge_monitor()
     await monitor.remove_challenge(challenge_id)
+
+
+async def update_monitored_challenger_wallet(challenge_id: int, challenger_wallet: str):
+    """
+    Refresh the challenger_wallet for a challenge already being monitored.
+    Call this when an opponent joins a PVP challenge.
+    """
+    monitor = get_challenge_monitor()
+    await monitor.set_challenger_wallet(challenge_id, challenger_wallet)
