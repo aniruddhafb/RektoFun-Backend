@@ -90,6 +90,14 @@ class ChallengeCreate(ChallengeBase):
         return value.split("/", 1)[0].strip().upper()
 
 
+class ChallengeAvailabilityResponse(BaseModel):
+    """Whether a proposed challenge is sufficiently different from active ones."""
+    allowed: bool
+    reason: Optional[str] = None
+    available_at: Optional[datetime] = None
+    conflicting_challenge_ids: list[int] = Field(default_factory=list)
+
+
 class ChallengeUpdate(BaseModel):
     """Model for updating an existing challenge - all fields optional"""
     statement: Optional[str] = Field(None, description="The challenge statement/question")

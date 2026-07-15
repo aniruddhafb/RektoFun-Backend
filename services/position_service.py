@@ -254,7 +254,8 @@ class PositionService:
     async def list_positions(
         self,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        creator_id: int | None = None,
     ) -> list[PositionResponse]:
         """
         List positions with pagination.
@@ -270,12 +271,10 @@ class PositionService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*")
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*")
+            if creator_id is not None:
+                query = query.eq("creator", creator_id)
+            result = query.range(offset, offset + limit - 1).execute()
             
             return [PositionResponse(**position) for position in result.data]
             
@@ -357,7 +356,7 @@ class PositionService:
             logger.error(f"Error deleting position {position_id}: {e}")
             raise
 
-    async def count_positions(self) -> int:
+    async def count_positions(self, creator_id: int | None = None) -> int:
         """
         Get total count of positions.
         
@@ -368,11 +367,10 @@ class PositionService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*", count="exact")
-                .execute()
-            )
+            query = self.db.table(self.table).select("*", count="exact")
+            if creator_id is not None:
+                query = query.eq("creator", creator_id)
+            result = query.execute()
             
             return result.count or 0
             
