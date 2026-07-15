@@ -3,15 +3,60 @@ Challenge service for CRUD operations on the challenge table.
 """
 
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 from supabase import Client
 
-from models.challenge import ChallengeCreate, ChallengeUpdate, ChallengeResponse, ChallengeStatus
+from models.challenge import (
+    ChallengeAvailabilityResponse,
+    ChallengeCreate,
+    ChallengeUpdate,
+    ChallengeResponse,
+    ChallengeStatus,
+    ResolutionMethod,
+)
 from services.category_service import CategoryService
 
 logger = logging.getLogger(__name__)
+
+PRICE_DIFFERENCE_RATIO = 0.05
+RESOLUTION_DIFFERENCE = timedelta(days=2)
+EXPIRY_GRACE = timedelta(hours=3)
+
+
+class DuplicateChallengeError(ValueError):
+    def __init__(self, availability: ChallengeAvailabilityResponse):
+        super().__init__(availability.reason or "A similar challenge already exists")
+        self.availability = availability
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _canonical_statement(value: str | None) -> str:
+    # Casing, punctuation and repeated whitespace should not make a statement unique.
+    return " ".join(re.findall(r"\w+", (value or "").casefold(), flags=re.UNICODE))
+
+
+def _resolution_time(challenge: dict) -> datetime | None:
+    composer = (challenge.get("metadata") or {}).get("composer") or {}
+    value = composer.get("resolves_at")
+    if value:
+        try:
+            return _utc(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
+        except (TypeError, ValueError):
+            pass
+    value = challenge.get("resolution_date")
+    if not value:
+        return None
+    try:
+        parsed = date.fromisoformat(str(value))
+        return datetime.combine(parsed, time.min, tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 class ChallengeService:
@@ -20,6 +65,67 @@ class ChallengeService:
     def __init__(self, db_client: Client):
         self.db = db_client
         self.table = "challenge"
+
+    async def check_availability(self, challenge_data: ChallengeCreate) -> ChallengeAvailabilityResponse:
+        """Apply duplicate rules against currently active challenges."""
+        now = datetime.now(timezone.utc)
+        result = (
+            self.db.table(self.table)
+            .select("id,statement,ticker,trading_pair,target,resolution_method,resolution_source,status,expiry,resolution_date,metadata")
+            .in_("status", [ChallengeStatus.OPEN.value, ChallengeStatus.PENDING_RESOLUTION.value])
+            .execute()
+        )
+        active = []
+        for item in result.data or []:
+            try:
+                expiry = _utc(datetime.fromisoformat(str(item.get("expiry")).replace("Z", "+00:00")))
+            except (TypeError, ValueError):
+                continue
+            if expiry > now:
+                active.append((item, expiry))
+
+        is_price = challenge_data.resolution_method == ResolutionMethod.PRICE_FEED or (
+            str(challenge_data.resolution_source or "").upper() == "PRICE_FEED"
+        )
+        conflicts: list[tuple[dict, datetime]] = []
+
+        if is_price:
+            asset = (challenge_data.ticker or challenge_data.trading_pair or "").split("/", 1)[0].strip().upper()
+            proposed_target = challenge_data.target
+            proposed_resolution = _resolution_time(challenge_data.model_dump(mode="json"))
+            for existing, expiry in active:
+                existing_asset = (existing.get("ticker") or existing.get("trading_pair") or "").split("/", 1)[0].strip().upper()
+                if not asset or existing_asset != asset or expiry - now <= EXPIRY_GRACE:
+                    continue
+                existing_target = existing.get("target")
+                price_is_different = (
+                    proposed_target is not None
+                    and existing_target is not None
+                    and float(existing_target) != 0
+                    and abs(float(proposed_target) - float(existing_target)) / abs(float(existing_target)) >= PRICE_DIFFERENCE_RATIO
+                )
+                existing_resolution = _resolution_time(existing)
+                time_is_different = (
+                    proposed_resolution is not None
+                    and existing_resolution is not None
+                    and abs(proposed_resolution - existing_resolution) >= RESOLUTION_DIFFERENCE
+                )
+                if not price_is_different and not time_is_different:
+                    conflicts.append((existing, expiry))
+            reason = "A similar price challenge already exists for this asset. Change the target by at least 5% or the resolution time by at least 2 days."
+            available_at = max((expiry - EXPIRY_GRACE for _, expiry in conflicts), default=None)
+        else:
+            statement = _canonical_statement(challenge_data.statement)
+            conflicts = [(item, expiry) for item, expiry in active if statement and _canonical_statement(item.get("statement")) == statement]
+            reason = "The same statement challenge already exists."
+            available_at = max((expiry for _, expiry in conflicts), default=None)
+
+        return ChallengeAvailabilityResponse(
+            allowed=not conflicts,
+            reason=reason if conflicts else None,
+            available_at=available_at,
+            conflicting_challenge_ids=[int(item["id"]) for item, _ in conflicts],
+        )
 
     async def create_challenge(self, challenge_data: ChallengeCreate) -> ChallengeResponse:
         """
@@ -35,6 +141,9 @@ class ChallengeService:
             Exception: If database operation fails
         """
         try:
+            availability = await self.check_availability(challenge_data)
+            if not availability.allowed:
+                raise DuplicateChallengeError(availability)
             data = challenge_data.model_dump(exclude_unset=True, mode="json")
             result = self.db.table(self.table).insert(data).execute()
             
@@ -196,6 +305,11 @@ class ChallengeService:
         offset: int = 0,
         resolution_source: str | None = None,
         creator_id: int | None = None,
+        open_first: bool = False,
+        status_filter: ChallengeStatus | None = None,
+        expiring_soon: bool = False,
+        search: str | None = None,
+        joinable: bool = False,
     ) -> list[ChallengeResponse]:
         """
         List challenges with pagination.
@@ -211,16 +325,79 @@ class ChallengeService:
             Exception: If database operation fails
         """
         try:
-            query = self.db.table(self.table).select(
-                "*, creator_details:user!challenge_creator_fkey(*)"
-            )
-            if resolution_source:
-                query = query.ilike("resolution_source", resolution_source)
-            if creator_id is not None:
-                query = query.eq("creator", creator_id)
-            result = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            def build_query():
+                query = self.db.table(self.table).select(
+                    "*, creator_details:user!challenge_creator_fkey(*)"
+                )
+                if resolution_source:
+                    query = query.ilike("resolution_source", resolution_source)
+                if creator_id is not None:
+                    query = query.eq("creator", creator_id)
+                if status_filter is not None:
+                    query = query.eq("status", status_filter.value)
+                if expiring_soon:
+                    query = query.eq("status", ChallengeStatus.OPEN.value).gt(
+                        "expiry", datetime.now(timezone.utc).isoformat()
+                    )
+                if joinable:
+                    query = query.eq("status", ChallengeStatus.OPEN.value).gt(
+                        "expiry", datetime.now(timezone.utc).isoformat()
+                    ).or_("mode.neq.PVP,bet_info->highest_bet->TEAM_B.is.null")
+                if search:
+                    term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                    query = query.or_(
+                        f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
+                    )
+                return query
 
-            return [ChallengeResponse(**challenge) for challenge in result.data]
+            if not open_first or status_filter is not None or expiring_soon or joinable:
+                query = build_query()
+                order_column = "expiry" if expiring_soon else "created_at"
+                result = query.order(order_column, desc=not expiring_soon).range(
+                    offset, offset + limit - 1
+                ).execute()
+                return [ChallengeResponse(**challenge) for challenge in result.data]
+
+            # Preserve status priority across page boundaries. Challenges within
+            # each status are ordered newest first.
+            status_order = [
+                ChallengeStatus.OPEN,
+                ChallengeStatus.PENDING_RESOLUTION,
+                ChallengeStatus.RESOLVED,
+                ChallengeStatus.EXPIRED,
+                ChallengeStatus.CANCELLED,
+            ]
+            rows: list[dict] = []
+            skipped = 0
+            for challenge_status in status_order:
+                count_query = self.db.table(self.table).select("id", count="exact")
+                if resolution_source:
+                    count_query = count_query.ilike("resolution_source", resolution_source)
+                if creator_id is not None:
+                    count_query = count_query.eq("creator", creator_id)
+                if search:
+                    term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                    count_query = count_query.or_(
+                        f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
+                    )
+                count_result = count_query.eq("status", challenge_status.value).limit(1).execute()
+                status_count = count_result.count or 0
+
+                if offset >= skipped + status_count:
+                    skipped += status_count
+                    continue
+
+                group_offset = max(0, offset - skipped)
+                group_limit = min(limit - len(rows), status_count - group_offset)
+                group_result = build_query().eq("status", challenge_status.value).order(
+                    "created_at", desc=True
+                ).range(group_offset, group_offset + group_limit - 1).execute()
+                rows.extend(group_result.data or [])
+                skipped += status_count
+                if len(rows) >= limit:
+                    break
+
+            return [ChallengeResponse(**challenge) for challenge in rows]
 
         except Exception as e:
             logger.error(f"Error listing challenges: {e}")
@@ -308,7 +485,15 @@ class ChallengeService:
             logger.error(f"Error deleting challenge {challenge_id}: {e}")
             raise
 
-    async def count_challenges(self, resolution_source: str | None = None, creator_id: int | None = None) -> int:
+    async def count_challenges(
+        self,
+        resolution_source: str | None = None,
+        creator_id: int | None = None,
+        status_filter: ChallengeStatus | None = None,
+        expiring_soon: bool = False,
+        search: str | None = None,
+        joinable: bool = False,
+    ) -> int:
         """
         Get total count of challenges.
         
@@ -324,6 +509,21 @@ class ChallengeService:
                 query = query.ilike("resolution_source", resolution_source)
             if creator_id is not None:
                 query = query.eq("creator", creator_id)
+            if status_filter is not None:
+                query = query.eq("status", status_filter.value)
+            if expiring_soon:
+                query = query.eq("status", ChallengeStatus.OPEN.value).gt(
+                    "expiry", datetime.now(timezone.utc).isoformat()
+                )
+            if joinable:
+                query = query.eq("status", ChallengeStatus.OPEN.value).gt(
+                    "expiry", datetime.now(timezone.utc).isoformat()
+                ).or_("mode.neq.PVP,bet_info->highest_bet->TEAM_B.is.null")
+            if search:
+                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                query = query.or_(
+                    f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
+                )
             result = query.execute()
             
             return result.count or 0
