@@ -18,7 +18,7 @@ from services.challenge_monitor_service import (
     start_challenge_monitor,
     stop_challenge_monitor,
 )
-from routes import users, challenges, positions, email_subscription, categories, notifications, activity
+from routes import users, challenges, positions, email_subscription, categories, notifications, activity, admin
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -99,7 +99,7 @@ async def handle_options(request: Request, path: str):
     headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, X-Admin-Wallet",
         "Access-Control-Allow-Credentials": "false",
         "Access-Control-Max-Age": "86400",
     }
@@ -135,6 +135,7 @@ app.include_router(email_subscription.router)
 app.include_router(categories.router, prefix="/api", tags=["categories"])
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
 app.include_router(activity.router, prefix="/api", tags=["activity"])
+app.include_router(admin.router, prefix="/api", tags=["admin"])
 
 # Future routers (to be added as needed)
 # app.include_router(transactions.router, prefix="/api/v1/transactions", tags=["transactions"])
