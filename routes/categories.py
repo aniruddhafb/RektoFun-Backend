@@ -2,50 +2,52 @@
 Category API routes for CRUD operations.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from supabase import Client
 
 from models.category import CategoryCreate, CategoryResponse, CategoryUpdate
 from services.category_service import get_category_service
+from services.database import get_request_db_client
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
 
 @router.get("", response_model=list[CategoryResponse])
-async def list_categories():
+async def list_categories(db: Client = Depends(get_request_db_client)):
     """Get all categories"""
-    service = get_category_service()
+    service = get_category_service(db)
     categories = service.get_all_categories()
     return categories
 
 
 @router.get("/with-challenges", response_model=list[CategoryResponse])
-async def list_categories_with_challenges():
+async def list_categories_with_challenges(db: Client = Depends(get_request_db_client)):
     """Get categories that have at least one challenge"""
-    service = get_category_service()
+    service = get_category_service(db)
     categories = service.get_categories_with_challenges()
     return categories
 
 
 @router.get("/by-parent/{parent_category}", response_model=list[CategoryResponse])
-async def get_child_categories(parent_category: str):
+async def get_child_categories(parent_category: str, db: Client = Depends(get_request_db_client)):
     """Get all child categories for a given parent category"""
-    service = get_category_service()
+    service = get_category_service(db)
     categories = service.get_child_categories(parent_category)
     return categories
 
 
 @router.get("/parent-categories", response_model=list[CategoryResponse])
-async def get_parent_categories():
+async def get_parent_categories(db: Client = Depends(get_request_db_client)):
     """Get all parent categories (categories with null parent_category)"""
-    service = get_category_service()
+    service = get_category_service(db)
     categories = service.get_parent_categories()
     return categories
 
 
 @router.get("/{category_id}", response_model=CategoryResponse)
-async def get_category(category_id: int):
+async def get_category(category_id: int, db: Client = Depends(get_request_db_client)):
     """Get a category by ID"""
-    service = get_category_service()
+    service = get_category_service(db)
     category = service.get_category_by_id(category_id)
     if not category:
         raise HTTPException(
@@ -56,9 +58,9 @@ async def get_category(category_id: int):
 
 
 @router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
-async def create_category(category: CategoryCreate):
+async def create_category(category: CategoryCreate, db: Client = Depends(get_request_db_client)):
     """Create a new category"""
-    service = get_category_service()
+    service = get_category_service(db)
     try:
         category_data = category.model_dump(exclude_unset=True)
         created = service.create_category(category_data)
@@ -76,9 +78,9 @@ async def create_category(category: CategoryCreate):
 
 
 @router.patch("/{category_id}", response_model=CategoryResponse)
-async def update_category(category_id: int, category: CategoryUpdate):
+async def update_category(category_id: int, category: CategoryUpdate, db: Client = Depends(get_request_db_client)):
     """Update an existing category"""
-    service = get_category_service()
+    service = get_category_service(db)
     try:
         category_data = category.model_dump(exclude_unset=True)
         if not category_data:
@@ -107,9 +109,9 @@ async def update_category(category_id: int, category: CategoryUpdate):
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_category(category_id: int):
+async def delete_category(category_id: int, db: Client = Depends(get_request_db_client)):
     """Delete a category by ID"""
-    service = get_category_service()
+    service = get_category_service(db)
     deleted = service.delete_category(category_id)
     if not deleted:
         raise HTTPException(

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from supabase import Client
 
 from models.notification import NotificationListResponse, NotificationReadRequest
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
 from services.notification_service import get_notification_service
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])

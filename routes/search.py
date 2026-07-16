@@ -5,7 +5,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from supabase import Client
 
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
+from services.leaderboard_service import LeaderboardService
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -31,7 +32,7 @@ def _compact_challenge(row: dict) -> dict:
     return row
 
 
-def _compact_user(row: dict) -> dict:
+def _compact_user(row: dict, metrics: dict | None = None) -> dict:
     compact = {
         key: row.get(key)
         for key in (
@@ -41,6 +42,8 @@ def _compact_user(row: dict) -> dict:
         )
     }
     compact["follower_count"] = len(row.get("followers") or [])
+    compact["won"] = (metrics or {}).get("won") or 0
+    compact["pnl"] = (metrics or {}).get("pnl") or 0
     return compact
 
 
@@ -73,9 +76,18 @@ async def search_modal(
             key=lambda user: (len(user.get("followers") or []), user.get("id") or 0),
             reverse=True,
         )[:6]
+        leaderboard = await LeaderboardService(db).get_leaderboard(
+            period="all", limit=1000, offset=0, search=term or None,
+            sort="rank", order="asc",
+        )
+        metrics_by_id = {
+            str(user.get("id")): user
+            for user in (leaderboard.get("users") or [])
+            if isinstance(user, dict) and user.get("id") is not None
+        }
         return {
             "challenges": [_compact_challenge(row) for row in (challenge_result.data or [])],
-            "users": [_compact_user(row) for row in users],
+            "users": [_compact_user(row, metrics_by_id.get(str(row.get("id")))) for row in users],
         }
     except Exception as exc:
         logger.error("Failed to load compact search results: %s", exc)

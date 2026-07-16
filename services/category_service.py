@@ -170,8 +170,10 @@ class CategoryService:
 _category_service: CategoryService | None = None
 
 
-def get_category_service() -> CategoryService:
+def get_category_service(supabase: Optional[Client] = None) -> CategoryService:
     """Get or create the category service singleton"""
+    if supabase is not None:
+        return CategoryService(supabase)
     global _category_service
     if _category_service is None:
         _category_service = CategoryService()

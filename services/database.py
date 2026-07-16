@@ -6,6 +6,8 @@ Provides database client initialization and connection management.
 
 from typing import Optional
 
+from fastapi import Request
+
 from supabase import Client, create_client
 
 from config import get_settings
@@ -46,7 +48,7 @@ class DatabaseService:
             if self._client is None:
                 self._client = create_client(
                     settings.supabase_url,
-                    settings.supabase_key
+                    settings.supabase_service_role_key
                 )
             return self._client
         except Exception as e:
@@ -104,3 +106,21 @@ def get_db_client() -> Client:
         Client: The Supabase client instance
     """
     return db_service.get_client()
+
+
+def get_service_db_client() -> Client:
+    """Privileged client for authenticated mutations and internal jobs."""
+    return db_service.get_client()
+
+
+def get_public_db_client() -> Client:
+    """Anon/RLS-scoped client for public read-only endpoints."""
+    from config import get_public_supabase_client
+    return get_public_supabase_client()
+
+
+def get_request_db_client(request: Request) -> Client:
+    """Select anon access for reads and service access for protected mutations."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return get_public_db_client()
+    return get_service_db_client()

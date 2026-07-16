@@ -22,7 +22,7 @@ from models.challenge import (
     Direction
 )
 from models.position import PositionCreate, Side
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
 from services.challenge_service import get_challenge_service, ChallengeService, DuplicateChallengeError
 from services.position_service import get_position_service
 from services.notification_service import get_notification_service

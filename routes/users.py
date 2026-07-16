@@ -22,7 +22,7 @@ from models.user import (
     UsernameCheckResponse,
     UserProfileResponse,
 )
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
 from services.user_service import get_user_service, UserService
 from services.leaderboard_service import LeaderboardService
 

@@ -15,7 +15,7 @@ from models.position import (
     PositionListResponse,
     Side
 )
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
 from services.position_service import get_position_service, PositionService
 
 logger = logging.getLogger(__name__)

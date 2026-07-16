@@ -2,22 +2,14 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from uuid import uuid4
 from pydantic import BaseModel
 from supabase import Client
 
-from services.database import get_db_client
+from services.database import get_service_db_client as get_db_client
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-ADMIN_WALLET = "mo3uv8Ai9FJEB4TEfFmj8H5SAh2SArr4tgcqNz9K41n"
-
-
-def require_admin(x_admin_wallet: str | None = Header(default=None)) -> None:
-    if x_admin_wallet != ADMIN_WALLET:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-
-
 class RoleUpdate(BaseModel):
     user_type: Literal["user", "moderator"]
 
@@ -30,7 +22,6 @@ class RedemptionStatusUpdate(BaseModel):
 async def update_user_role(
     user_id: int,
     payload: RoleUpdate,
-    _: None = Depends(require_admin),
     db: Client = Depends(get_db_client),
 ):
     result = db.table("user").update({"user_type": payload.user_type}).eq("id", user_id).execute()
@@ -41,7 +32,6 @@ async def update_user_role(
 
 @router.get("/referrals")
 async def list_referrals(
-    _: None = Depends(require_admin),
     db: Client = Depends(get_db_client),
 ):
     users = db.table("user").select(
@@ -62,7 +52,6 @@ async def list_referrals(
 async def update_redemption_status(
     redemption_id: int,
     payload: RedemptionStatusUpdate,
-    _: None = Depends(require_admin),
     db: Client = Depends(get_db_client),
 ):
     result = db.table("referral_redemption_requests").update(
@@ -76,7 +65,6 @@ async def update_redemption_status(
 @router.post("/category-image")
 async def upload_category_image(
     image: UploadFile = File(...),
-    _: None = Depends(require_admin),
     db: Client = Depends(get_db_client),
 ):
     if not image.content_type or not image.content_type.startswith("image/"):

@@ -8,9 +8,9 @@ successful Solana transaction.
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 
 from config import get_settings
 from services.database import db_service, get_db_client
@@ -19,6 +19,7 @@ from services.challenge_monitor_service import (
     stop_challenge_monitor,
 )
 from routes import users, challenges, positions, email_subscription, categories, notifications, activity, admin, search
+from security import body_limit_for, enforce_rate_limit, mutation_requires_internal_auth, require_internal_api_key
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,34 +77,40 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS - TEMPORARILY ALLOW ALL ORIGINS
-# TODO: Restrict origins once the frontend domain is finalized.
+# Only browsers served from the configured RektoFun origins may make
+# cross-origin requests to this API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_settings().cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "X-Requested-With"],
 )
 
 
-# Handle OPTIONS preflight requests globally
-@app.options("/{path:path}")
-async def handle_options(request: Request, path: str):
-    """
-    Handle CORS preflight requests for all routes.
-    Mirrors any origin so cross-origin POSTs (e.g., create_challenge) work.
-    """
-    origin = request.headers.get("origin", "*")
-    headers = {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, X-Admin-Wallet",
-        "Access-Control-Allow-Credentials": "false",
-        "Access-Control-Max-Age": "86400",
-    }
-    return Response(status_code=200, headers=headers)
+@app.middleware("http")
+async def enforce_http_security(request: Request, call_next):
+    """Bound request cost and require the private server channel for mutations."""
+    try:
+        enforce_rate_limit(request)
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > body_limit_for(request):
+                    return JSONResponse({"detail": "Request body too large"}, status_code=413)
+            except ValueError:
+                return JSONResponse({"detail": "Invalid Content-Length header"}, status_code=400)
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            body = await request.body()
+            if len(body) > body_limit_for(request):
+                return JSONResponse({"detail": "Request body too large"}, status_code=413)
+        if mutation_requires_internal_auth(request):
+            require_internal_api_key(request)
+    except HTTPException as exc:
+        return JSONResponse(
+            {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers or {}
+        )
+    return await call_next(request)
 
 
 @app.get("/health")
