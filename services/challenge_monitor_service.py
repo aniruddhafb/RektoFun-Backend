@@ -379,10 +379,18 @@ class ChallengeMonitorService:
         Failures are logged but do NOT affect the DB status.
         """
         from config import get_settings
-        settlement_url = get_settings().settlement_service_url
+        settings = get_settings()
+        settlement_url = settings.settlement_service_url.rstrip("/")
         if not settlement_url:
             logger.warning(
                 f"SETTLEMENT_API not configured — skipping on-chain settlement for challenge {challenge_id}"
+            )
+            return False
+        settlement_secret = settings.settlement_api_secret
+        if not settlement_secret:
+            logger.warning(
+                f"SETTLEMENT_API_SECRET not configured — skipping on-chain settlement for "
+                f"challenge {challenge_id} rather than calling the settlement service unauthenticated"
             )
             return False
 
@@ -404,6 +412,7 @@ class ChallengeMonitorService:
                 async with session.post(
                     f"{settlement_url}/settle-challenge",
                     json=payload,
+                    headers={"x-settlement-api-key": settlement_secret},
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     body = await resp.json()
