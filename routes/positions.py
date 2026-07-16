@@ -10,11 +10,12 @@ from supabase import Client
 from models.position import (
     PositionCreate,
     PositionUpdate,
+    ChallengeParticipantPosition,
     PositionResponse,
     PositionListResponse,
     Side
 )
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
 from services.position_service import get_position_service, PositionService
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,27 @@ async def list_positions(
 
 
 @router.get(
-    "/{position_id}",
+    "/joined-challenge-ids",
+    response_model=list[int],
+    summary="List challenge IDs joined by a user",
+)
+async def list_joined_challenge_ids(
+    creator: int = Query(..., description="User ID whose joined challenges should be returned"),
+    db: Client = Depends(get_db_client),
+):
+    """Return a compact list for rendering challenge-card participation state."""
+    try:
+        return await get_position_service(db).list_joined_challenge_ids(creator)
+    except Exception as e:
+        logger.error(f"Failed to list joined challenge IDs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve joined challenges",
+        )
+
+
+@router.get(
+    "/{position_id:int}",
     response_model=PositionResponse,
     summary="Get position by ID",
     description="Retrieve a specific position by its ID"
@@ -119,7 +140,7 @@ async def get_position(
 
 @router.get(
     "/by-challenge/{challenge_id}",
-    response_model=list[PositionResponse],
+    response_model=list[ChallengeParticipantPosition],
     summary="Get positions by challenge",
     description="Retrieve all positions for a specific challenge"
 )

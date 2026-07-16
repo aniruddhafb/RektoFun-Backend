@@ -25,6 +25,13 @@ PRICE_DIFFERENCE_RATIO = 0.05
 RESOLUTION_DIFFERENCE = timedelta(days=2)
 EXPIRY_GRACE = timedelta(hours=3)
 
+# Challenge cards need only these columns. In particular, avoid returning every
+# user column (email, referrals, followers, earnings, etc.) for every card.
+CHALLENGE_LIST_SELECT = """id,views,statement,ticker,trading_pair,target,initial_bet,pool_size,
+resolution_source,metadata,creator,resolution_method,participants,status,mode,result,direction,
+expiry,resolution_date,final_price,category,bet_info,created_at,resolved_at,
+creator_details:user!challenge_creator_fkey(id,created_at,username,pubkey,profile_image,twitter_username,user_type)""".replace("\n", "")
+
 
 class DuplicateChallengeError(ValueError):
     def __init__(self, availability: ChallengeAvailabilityResponse):
@@ -39,6 +46,19 @@ def _utc(value: datetime) -> datetime:
 def _canonical_statement(value: str | None) -> str:
     # Casing, punctuation and repeated whitespace should not make a statement unique.
     return " ".join(re.findall(r"\w+", (value or "").casefold(), flags=re.UNICODE))
+
+
+def _challenge_search_filter(value: str) -> str | None:
+    """Build a safe PostgREST OR filter using columns that exist in challenge."""
+    # Slash is useful for trading pairs (BTC/USDC) and is safe in filter values.
+    term = re.sub(r"[^\w\s/]", " ", value.strip(), flags=re.UNICODE)
+    term = " ".join(term.split())
+    if not term:
+        return None
+    return (
+        f"statement.ilike.%{term}%,ticker.ilike.%{term}%,"
+        f"trading_pair.ilike.%{term}%,category.ilike.%{term}%"
+    )
 
 
 def _resolution_time(challenge: dict) -> datetime | None:
@@ -388,7 +408,7 @@ class ChallengeService:
         try:
             def build_query():
                 query = self.db.table(self.table).select(
-                    "*, creator_details:user!challenge_creator_fkey(*)"
+                    CHALLENGE_LIST_SELECT
                 )
                 if resolution_source:
                     query = query.ilike("resolution_source", resolution_source)
@@ -405,10 +425,9 @@ class ChallengeService:
                         "expiry", datetime.now(timezone.utc).isoformat()
                     ).or_("mode.neq.PVP,bet_info->highest_bet->TEAM_B.is.null")
                 if search:
-                    term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
-                    query = query.or_(
-                        f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
-                    )
+                    search_filter = _challenge_search_filter(search)
+                    if search_filter:
+                        query = query.or_(search_filter)
                 return query
 
             if not open_first or status_filter is not None or expiring_soon or joinable:
@@ -437,10 +456,9 @@ class ChallengeService:
                 if creator_id is not None:
                     count_query = count_query.eq("creator", creator_id)
                 if search:
-                    term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
-                    count_query = count_query.or_(
-                        f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
-                    )
+                    search_filter = _challenge_search_filter(search)
+                    if search_filter:
+                        count_query = count_query.or_(search_filter)
                 count_result = count_query.eq("status", challenge_status.value).limit(1).execute()
                 status_count = count_result.count or 0
 
@@ -581,10 +599,9 @@ class ChallengeService:
                     "expiry", datetime.now(timezone.utc).isoformat()
                 ).or_("mode.neq.PVP,bet_info->highest_bet->TEAM_B.is.null")
             if search:
-                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
-                query = query.or_(
-                    f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
-                )
+                search_filter = _challenge_search_filter(search)
+                if search_filter:
+                    query = query.or_(search_filter)
             result = query.execute()
             
             return result.count or 0

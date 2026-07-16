@@ -231,7 +231,8 @@ class UserService:
     async def list_users(
         self,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        search: str | None = None,
     ) -> list[UserResponse]:
         """
         List users with pagination.
@@ -247,12 +248,13 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*")
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*")
+            if search:
+                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                query = query.or_(
+                    f"username.ilike.%{term}%,email.ilike.%{term}%,pubkey.ilike.%{term}%,twitter_username.ilike.%{term}%"
+                )
+            result = query.order("id").range(offset, offset + limit - 1).execute()
             
             return [UserResponse(**user) for user in result.data]
             
@@ -459,7 +461,7 @@ class UserService:
             logger.error(f"Error deleting user {user_id}: {e}")
             raise
 
-    async def count_users(self) -> int:
+    async def count_users(self, search: str | None = None) -> int:
         """
         Get total count of users.
         
@@ -470,12 +472,13 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*", count="exact")
-                .limit(0)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*", count="exact")
+            if search:
+                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                query = query.or_(
+                    f"username.ilike.%{term}%,email.ilike.%{term}%,pubkey.ilike.%{term}%,twitter_username.ilike.%{term}%"
+                )
+            result = query.limit(0).execute()
             
             return result.count or 0
             

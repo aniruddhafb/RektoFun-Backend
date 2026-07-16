@@ -355,7 +355,7 @@ class ChallengeMonitorService:
                 )
 
             # Unsubscribe only if this was the last challenge for this symbol
-            if symbol and should_unsubscribe:
+            if symbol and should_unsubscribe and self._ws_client:
                 await self._ws_client.unsubscribe(symbol)
                 logger.info(f"Unsubscribed from {symbol} - no more challenges using it")
 
@@ -619,6 +619,124 @@ class ChallengeMonitorService:
                     
         except Exception as e:
             logger.error(f"Error in resolve_challenges_by_date: {e}")
+
+    async def resolve_challenge_by_id(
+        self,
+        challenge_id: int,
+        creator_wins: bool | None = None,
+        final_price: float | None = None,
+    ) -> dict:
+        """Resolve and settle one due challenge from the admin workflow."""
+        from datetime import date, datetime, timezone
+
+        service = self._get_challenge_service()
+        challenge = await service.get_challenge(challenge_id)
+        if not challenge:
+            raise ValueError("Challenge not found")
+        if challenge.status not in (
+            ChallengeStatus.OPEN.value,
+            ChallengeStatus.RESOLVED.value,
+        ):
+            raise ValueError(f"Challenge status {challenge.status} cannot be resolved")
+        if not challenge.resolution_date or challenge.resolution_date > date.today():
+            raise ValueError("Challenge resolution date has not been reached")
+
+        bet_info = challenge.bet_info or {}
+        team_b_count = (
+            (bet_info.get("team_count") or {}).get("TEAM_B") or {}
+        ).get("total_bets", 0)
+        team_b_highest_bet = (bet_info.get("highest_bet") or {}).get("TEAM_B")
+        onchain_metadata = (challenge.metadata or {}).get("onchain") or {}
+        if not team_b_count and not team_b_highest_bet and not onchain_metadata.get("challenger_wallet"):
+            raise ValueError("Challenge cannot be resolved because no opponent joined")
+
+        resolution_method = str(challenge.resolution_method or "").upper()
+        resolution_source = str(challenge.resolution_source or "").upper()
+        is_price_feed = resolution_method.endswith("PRICE_FEED") or resolution_source == "PRICE_FEED"
+
+        if challenge.status == ChallengeStatus.OPEN.value:
+            if is_price_feed:
+                raw_pair = challenge.trading_pair or ""
+                symbol = raw_pair.replace("/", "").upper()
+                if not symbol:
+                    raise ValueError("Price-feed challenge has no trading pair")
+                final_price = await self._get_current_price(symbol)
+                if final_price is None:
+                    raise RuntimeError(f"Could not fetch a current price for {symbol}")
+                target = challenge.target
+                if target is None:
+                    raise ValueError("Price-feed challenge has no target")
+                creator_wins = (
+                    final_price >= target
+                    if str(challenge.direction).upper().endswith("UP")
+                    else final_price <= target
+                )
+            elif creator_wins is None:
+                raise ValueError("Manual resolution requires a winning side")
+
+            update_data = {
+                "status": ChallengeStatus.RESOLVED.value,
+                "result": "TEAM_A" if creator_wins else "TEAM_B",
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if final_price is not None:
+                update_data["final_price"] = final_price
+            result = (
+                service.db.table("challenge")
+                .update(update_data)
+                .eq("id", challenge_id)
+                .execute()
+            )
+            if not result.data:
+                raise RuntimeError("Challenge database update failed")
+            challenge_data = result.data[0]
+        else:
+            challenge_data = challenge.model_dump(mode="json")
+            if creator_wins is None:
+                stored_result = str(challenge.result or "").upper()
+                creator_wins = stored_result.endswith("TEAM_A") if stored_result else is_price_feed
+            final_price = challenge.final_price
+
+        await self.remove_challenge(challenge_id)
+
+        onchain = (challenge_data.get("metadata") or {}).get("onchain") or {}
+        challenge_pda = onchain.get("challenge_pda")
+        creator_wallet = onchain.get("creator_wallet")
+        challenger_wallet = onchain.get("challenger_wallet")
+        mode = challenge_data.get("mode") or "PVP"
+        settlement_attempted = False
+        settlement_succeeded = False
+        settlement_note = None
+
+        if mode == "PVP" and not challenger_wallet:
+            settlement_note = "PVP challenge has no challenger; no on-chain pot was settled"
+        elif not challenge_pda or not creator_wallet:
+            settlement_note = "Missing on-chain challenge PDA or creator wallet"
+        else:
+            settlement_attempted = True
+            winner_wallet = creator_wallet if creator_wins else (challenger_wallet or creator_wallet)
+            settlement_succeeded = await self._call_settlement_service(
+                challenge_id=challenge_id,
+                challenge_pda=challenge_pda,
+                creator_wallet=creator_wallet,
+                challenger_wallet=challenger_wallet,
+                winner_wallet=winner_wallet,
+                creator_wins=bool(creator_wins),
+                mode=mode,
+            )
+            if not settlement_succeeded:
+                settlement_note = "Database resolved, but on-chain settlement did not succeed"
+
+        return {
+            "challenge_id": challenge_id,
+            "status": ChallengeStatus.RESOLVED.value,
+            "resolution_method": "PRICE_FEED" if is_price_feed else "MANUAL",
+            "creator_wins": bool(creator_wins),
+            "final_price": final_price,
+            "settlement_attempted": settlement_attempted,
+            "settlement_succeeded": settlement_succeeded,
+            "settlement_note": settlement_note,
+        }
 
     async def _get_current_price(self, symbol: str) -> float | None:
         """

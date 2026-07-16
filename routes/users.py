@@ -20,14 +20,20 @@ from models.user import (
     UserListResponse,
     LeaderboardResponse,
     UsernameCheckResponse,
+    UserProfileResponse,
 )
-from services.database import get_db_client
+from services.database import get_request_db_client as get_db_client
 from services.user_service import get_user_service, UserService
 from services.leaderboard_service import LeaderboardService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+PROFILE_USER_FIELDS = (
+    "id,username,pubkey,profile_image,bio,twitter_username,created_at,"
+    "followers,following,user_type"
+)
 
 
 def _is_username_unique_violation(error: Exception) -> bool:
@@ -107,6 +113,7 @@ async def create_user(
 async def list_users(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of users to return"),
     offset: int = Query(0, ge=0, description="Number of users to skip"),
+    search: Optional[str] = Query(None, max_length=100, description="Search username, email, or wallet"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -117,8 +124,8 @@ async def list_users(
     """
     service = get_user_service(db)
     try:
-        users = await service.list_users(limit=limit, offset=offset)
-        total = await service.count_users()
+        users = await service.list_users(limit=limit, offset=offset, search=search)
+        total = await service.count_users(search=search)
         return UserListResponse(users=users, total=total)
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
@@ -157,6 +164,38 @@ async def get_leaderboard(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve leaderboard"
         )
+
+
+@router.get(
+    "/profile/{pubkey}",
+    response_model=UserProfileResponse,
+    summary="Get the compact public profile payload",
+)
+async def get_user_profile(pubkey: str, db: Client = Depends(get_db_client)):
+    try:
+        result = db.table("user").select(PROFILE_USER_FIELDS).eq("pubkey", pubkey).limit(1).execute()
+        if not result.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        user = result.data[0]
+        leaderboard = await LeaderboardService(db).get_leaderboard(
+            period="all", limit=1, offset=0, search=pubkey, sort="pnl", order="desc"
+        )
+        rows = leaderboard.get("users") if isinstance(leaderboard, dict) else []
+        matching = next(
+            (row for row in (rows or []) if str(row.get("pubkey") or row.get("wallet_address") or "").lower() == pubkey.lower()),
+            {},
+        )
+        user["metrics"] = {
+            key: matching.get(key, 0)
+            for key in ("won", "lost", "win_rate", "pnl", "volume")
+        }
+        return user
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to get profile for %s: %s", pubkey, exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve profile") from exc
 
 
 @router.get(
