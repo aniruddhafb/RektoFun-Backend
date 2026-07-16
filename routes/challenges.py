@@ -6,6 +6,8 @@ import logging
 import os
 from typing import Optional
 
+from pydantic import BaseModel, Field
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Header
 from supabase import Client
 
@@ -33,6 +35,11 @@ from services.challenge_monitor_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/challenges", tags=["challenges"])
+
+
+class AdminChallengeResolution(BaseModel):
+    creator_wins: Optional[bool] = None
+    final_price: Optional[float] = Field(default=None, gt=0)
 
 
 @router.post("/availability", response_model=ChallengeAvailabilityResponse)
@@ -543,3 +550,29 @@ async def resolve_challenges_due_cron():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resolve challenges"
         )
+
+
+@router.post(
+    "/cron/resolve/{challenge_id}",
+    summary="Resolve one due challenge (authenticated)",
+    dependencies=[Depends(verify_cron_api_key)],
+)
+async def resolve_single_challenge_cron(
+    challenge_id: int,
+    resolution: AdminChallengeResolution,
+):
+    """Resolve exactly one due challenge and attempt its on-chain settlement."""
+    try:
+        return await get_challenge_monitor().resolve_challenge_by_id(
+            challenge_id=challenge_id,
+            creator_wins=resolution.creator_wins,
+            final_price=resolution.final_price,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to resolve challenge {challenge_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc

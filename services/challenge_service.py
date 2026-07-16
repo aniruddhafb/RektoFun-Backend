@@ -41,6 +41,19 @@ def _canonical_statement(value: str | None) -> str:
     return " ".join(re.findall(r"\w+", (value or "").casefold(), flags=re.UNICODE))
 
 
+def _challenge_search_filter(value: str) -> str | None:
+    """Build a safe PostgREST OR filter using columns that exist in challenge."""
+    # Slash is useful for trading pairs (BTC/USDC) and is safe in filter values.
+    term = re.sub(r"[^\w\s/]", " ", value.strip(), flags=re.UNICODE)
+    term = " ".join(term.split())
+    if not term:
+        return None
+    return (
+        f"statement.ilike.%{term}%,ticker.ilike.%{term}%,"
+        f"trading_pair.ilike.%{term}%,category.ilike.%{term}%"
+    )
+
+
 def _resolution_time(challenge: dict) -> datetime | None:
     composer = (challenge.get("metadata") or {}).get("composer") or {}
     value = composer.get("resolves_at")
@@ -405,10 +418,9 @@ class ChallengeService:
                         "expiry", datetime.now(timezone.utc).isoformat()
                     ).or_("mode.neq.PVP,bet_info->highest_bet->TEAM_B.is.null")
                 if search:
-                    term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
-                    query = query.or_(
-                        f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
-                    )
+                    search_filter = _challenge_search_filter(search)
+                    if search_filter:
+                        query = query.or_(search_filter)
                 return query
 
             if not open_first or status_filter is not None or expiring_soon or joinable:
@@ -437,10 +449,9 @@ class ChallengeService:
                 if creator_id is not None:
                     count_query = count_query.eq("creator", creator_id)
                 if search:
-                    term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
-                    count_query = count_query.or_(
-                        f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
-                    )
+                    search_filter = _challenge_search_filter(search)
+                    if search_filter:
+                        count_query = count_query.or_(search_filter)
                 count_result = count_query.eq("status", challenge_status.value).limit(1).execute()
                 status_count = count_result.count or 0
 
@@ -581,10 +592,9 @@ class ChallengeService:
                     "expiry", datetime.now(timezone.utc).isoformat()
                 ).or_("mode.neq.PVP,bet_info->highest_bet->TEAM_B.is.null")
             if search:
-                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
-                query = query.or_(
-                    f"statement.ilike.%{term}%,title.ilike.%{term}%,ticker.ilike.%{term}%"
-                )
+                search_filter = _challenge_search_filter(search)
+                if search_filter:
+                    query = query.or_(search_filter)
             result = query.execute()
             
             return result.count or 0

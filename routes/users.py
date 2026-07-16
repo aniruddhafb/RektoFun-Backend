@@ -107,6 +107,7 @@ async def create_user(
 async def list_users(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of users to return"),
     offset: int = Query(0, ge=0, description="Number of users to skip"),
+    search: Optional[str] = Query(None, max_length=100, description="Search username, email, or wallet"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -117,8 +118,8 @@ async def list_users(
     """
     service = get_user_service(db)
     try:
-        users = await service.list_users(limit=limit, offset=offset)
-        total = await service.count_users()
+        users = await service.list_users(limit=limit, offset=offset, search=search)
+        total = await service.count_users(search=search)
         return UserListResponse(users=users, total=total)
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
