@@ -51,6 +51,9 @@ class Settings(BaseModel):
     settlement_service_url: str = Field(
         default_factory=lambda: os.getenv("SETTLEMENT_API", "").strip()
     )
+    settlement_api_secret: str = Field(
+        default_factory=lambda: os.getenv("SETTLEMENT_API_SECRET", "").strip()
+    )
 
     # Email configuration
     smtp_server: str = Field(default_factory=lambda: os.getenv("SMTP_SERVER", "smtp.gmail.com").strip())
