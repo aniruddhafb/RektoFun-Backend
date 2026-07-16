@@ -51,6 +51,29 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class ProfileMetrics(BaseModel):
+    won: int = 0
+    lost: int = 0
+    win_rate: float = 0
+    pnl: float = 0
+    volume: float = 0
+
+
+class UserProfileResponse(BaseModel):
+    """Only the user data rendered by the public profile page."""
+    id: int
+    username: str | None = None
+    pubkey: str | None = None
+    profile_image: str | None = None
+    bio: str | None = None
+    twitter_username: str | None = None
+    created_at: datetime
+    followers: list[int] = Field(default_factory=list)
+    following: list[int] = Field(default_factory=list)
+    user_type: Literal["user", "moderator"] = "user"
+    metrics: ProfileMetrics = Field(default_factory=ProfileMetrics)
+
+
 class UserListResponse(BaseModel):
     """Model for list of users response"""
     users: list[UserResponse]

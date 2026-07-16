@@ -7,7 +7,7 @@ from typing import Optional
 
 from supabase import Client
 
-from models.position import PositionCreate, PositionUpdate, PositionResponse, Side
+from models.position import ChallengeParticipantPosition, PositionCreate, PositionUpdate, PositionResponse, Side
 from models.challenge import ChallengeUpdate
 from services.challenge_service import get_challenge_service
 from services.user_service import get_user_service
@@ -170,7 +170,7 @@ class PositionService:
             logger.error(f"Error fetching position {position_id}: {e}")
             raise
 
-    async def get_positions_by_challenge(self, challenge_id: int) -> list[PositionResponse]:
+    async def get_positions_by_challenge(self, challenge_id: int) -> list[ChallengeParticipantPosition]:
         """
         Get all positions for a specific challenge.
         
@@ -186,12 +186,17 @@ class PositionService:
         try:
             result = (
                 self.db.table(self.table)
-                .select("*")
+                .select(
+                    "id,challenge_id,bet,side,creator,created_at,"
+                    "user:user!position_creator_fkey("
+                    "id,username,pubkey,profile_image,twitter_username,user_type)"
+                )
                 .eq("challenge_id", challenge_id)
+                .order("created_at", desc=True)
                 .execute()
             )
             
-            return [PositionResponse(**position) for position in result.data]
+            return [ChallengeParticipantPosition(**position) for position in (result.data or [])]
             
         except Exception as e:
             logger.error(f"Error fetching positions by challenge {challenge_id}: {e}")
@@ -280,6 +285,20 @@ class PositionService:
             
         except Exception as e:
             logger.error(f"Error listing positions: {e}")
+            raise
+
+    async def list_joined_challenge_ids(self, creator_id: int) -> list[int]:
+        """Return only the challenge IDs joined by a user."""
+        try:
+            result = (
+                self.db.table(self.table)
+                .select("challenge_id")
+                .eq("creator", creator_id)
+                .execute()
+            )
+            return list({row["challenge_id"] for row in (result.data or []) if row.get("challenge_id") is not None})
+        except Exception as e:
+            logger.error(f"Error fetching joined challenge IDs for creator {creator_id}: {e}")
             raise
 
     async def update_position(

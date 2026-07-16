@@ -25,6 +25,13 @@ PRICE_DIFFERENCE_RATIO = 0.05
 RESOLUTION_DIFFERENCE = timedelta(days=2)
 EXPIRY_GRACE = timedelta(hours=3)
 
+# Challenge cards need only these columns. In particular, avoid returning every
+# user column (email, referrals, followers, earnings, etc.) for every card.
+CHALLENGE_LIST_SELECT = """id,views,statement,ticker,trading_pair,target,initial_bet,pool_size,
+resolution_source,metadata,creator,resolution_method,participants,status,mode,result,direction,
+expiry,resolution_date,final_price,category,bet_info,created_at,resolved_at,
+creator_details:user!challenge_creator_fkey(id,created_at,username,pubkey,profile_image,twitter_username,user_type)""".replace("\n", "")
+
 
 class DuplicateChallengeError(ValueError):
     def __init__(self, availability: ChallengeAvailabilityResponse):
@@ -401,7 +408,7 @@ class ChallengeService:
         try:
             def build_query():
                 query = self.db.table(self.table).select(
-                    "*, creator_details:user!challenge_creator_fkey(*)"
+                    CHALLENGE_LIST_SELECT
                 )
                 if resolution_source:
                     query = query.ilike("resolution_source", resolution_source)

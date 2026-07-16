@@ -18,7 +18,7 @@ from services.challenge_monitor_service import (
     start_challenge_monitor,
     stop_challenge_monitor,
 )
-from routes import users, challenges, positions, email_subscription, categories, notifications, activity, admin
+from routes import users, challenges, positions, email_subscription, categories, notifications, activity, admin, search
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -136,6 +136,7 @@ app.include_router(categories.router, prefix="/api", tags=["categories"])
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
 app.include_router(activity.router, prefix="/api", tags=["activity"])
 app.include_router(admin.router, prefix="/api", tags=["admin"])
+app.include_router(search.router, prefix="/api", tags=["search"])
 
 # Future routers (to be added as needed)
 # app.include_router(transactions.router, prefix="/api/v1/transactions", tags=["transactions"])

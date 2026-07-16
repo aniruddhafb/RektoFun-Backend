@@ -139,6 +139,7 @@ class ChallengeListResponse(BaseModel):
     """Model for list of challenges response"""
     challenges: list[ChallengeResponse]
     total: int = Field(..., description="Total number of challenges")
+    has_more: bool = Field(False, description="Whether another page is available")
 
 
 class ChallengeViewResponse(BaseModel):

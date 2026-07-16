@@ -45,6 +45,21 @@ class PositionResponse(PositionBase):
         from_attributes = True
 
 
+class PositionParticipantUser(BaseModel):
+    """Public user fields needed by the challenge detail modal."""
+    id: int
+    username: Optional[str] = None
+    pubkey: Optional[str] = None
+    profile_image: Optional[str] = None
+    twitter_username: Optional[str] = None
+    user_type: str = "user"
+
+
+class ChallengeParticipantPosition(PositionResponse):
+    """A position with its participant resolved in the same database query."""
+    user: Optional[PositionParticipantUser] = None
+
+
 class PositionListResponse(BaseModel):
     """Model for list of positions response"""
     positions: list[PositionResponse]

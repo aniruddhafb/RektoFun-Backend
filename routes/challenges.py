@@ -160,6 +160,7 @@ async def list_challenges(
     expiring_soon: bool = Query(False, description="Return only unexpired OPEN challenges, soonest first"),
     search: Optional[str] = Query(None, min_length=1, max_length=100, description="Search challenge text or ticker"),
     joinable: bool = Query(False, description="Return only challenges currently open to new participants"),
+    include_total: bool = Query(True, description="Run an exact count query (disable for infinite scrolling)"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -171,8 +172,11 @@ async def list_challenges(
     """
     service = get_challenge_service(db)
     try:
+        # Infinite-scroll clients only need to know whether another page exists.
+        # Fetching one extra row avoids an exact COUNT over the filtered table.
+        fetch_limit = limit if include_total else limit + 1
         challenges = await service.list_challenges(
-            limit=limit,
+            limit=fetch_limit,
             offset=offset,
             resolution_source=resolution_source,
             creator_id=created_by,
@@ -182,15 +186,21 @@ async def list_challenges(
             search=search,
             joinable=joinable,
         )
-        total = await service.count_challenges(
-            resolution_source=resolution_source,
-            creator_id=created_by,
-            status_filter=challenge_status,
-            expiring_soon=expiring_soon,
-            search=search,
-            joinable=joinable,
-        )
-        return ChallengeListResponse(challenges=challenges, total=total)
+        has_more = len(challenges) > limit
+        challenges = challenges[:limit]
+        if include_total:
+            total = await service.count_challenges(
+                resolution_source=resolution_source,
+                creator_id=created_by,
+                status_filter=challenge_status,
+                expiring_soon=expiring_soon,
+                search=search,
+                joinable=joinable,
+            )
+            has_more = offset + len(challenges) < total
+        else:
+            total = offset + len(challenges) + (1 if has_more else 0)
+        return ChallengeListResponse(challenges=challenges, total=total, has_more=has_more)
     except Exception as e:
         logger.error(f"Failed to list challenges: {e}")
         raise HTTPException(
