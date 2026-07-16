@@ -379,7 +379,7 @@ class ChallengeMonitorService:
         Failures are logged but do NOT affect the DB status.
         """
         from config import get_settings
-        settlement_url = get_settings().settlement_service_url
+        settlement_url = get_settings().settlement_service_url.rstrip("/")
         if not settlement_url:
             logger.warning(
                 f"SETTLEMENT_API not configured — skipping on-chain settlement for challenge {challenge_id}"
