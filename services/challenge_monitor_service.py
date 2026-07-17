@@ -330,6 +330,8 @@ class ChallengeMonitorService:
             creator_wallet = fresh_onchain.get("creator_wallet") or challenge_data.get("creator_wallet")
             challenger_wallet = fresh_onchain.get("challenger_wallet") or challenge_data.get("challenger_wallet")
             mode = (getattr(resolved_challenge, "mode", None) or challenge_data.get("mode") or "PVP")
+            resolves_at = ((getattr(resolved_challenge, "metadata", None) or {}).get("composer") or {}).get("resolves_at")
+            resolves_at_dt = datetime.fromisoformat(str(resolves_at).replace("Z", "+00:00")) if resolves_at else None
 
             if mode == "PVP" and not challenger_wallet:
                 # PVP challenge with no challenger is still Open on-chain — the
@@ -337,6 +339,11 @@ class ChallengeMonitorService:
                 logger.info(
                     f"Challenge {challenge_id} is PVP with no challenger — "
                     f"skipping on-chain settlement (no pot to distribute)"
+                )
+            elif resolves_at_dt and resolves_at_dt > datetime.now(timezone.utc):
+                logger.info(
+                    f"Challenge {challenge_id} resolved in DB before on-chain resolves_at; "
+                    "settlement will be retried by the due-resolution job"
                 )
             elif challenge_pda and creator_wallet:
                 await self._call_settlement_service(
@@ -634,6 +641,7 @@ class ChallengeMonitorService:
         challenge_id: int,
         creator_wins: bool | None = None,
         final_price: float | None = None,
+        operation: str = "resolve_all",
     ) -> dict:
         """Resolve and settle one due challenge from the admin workflow."""
         from datetime import date, datetime, timezone
@@ -649,6 +657,14 @@ class ChallengeMonitorService:
             raise ValueError(f"Challenge status {challenge.status} cannot be resolved")
         if not challenge.resolution_date or challenge.resolution_date > date.today():
             raise ValueError("Challenge resolution date has not been reached")
+        composer = (challenge.metadata or {}).get("composer") or {}
+        resolves_at = composer.get("resolves_at")
+        if operation != "resolve_db" and resolves_at:
+            resolves_at_dt = datetime.fromisoformat(str(resolves_at).replace("Z", "+00:00"))
+            if resolves_at_dt > datetime.now(timezone.utc):
+                raise ValueError(
+                    f"On-chain settlement is locked until {resolves_at_dt.isoformat()}"
+                )
 
         bet_info = challenge.bet_info or {}
         team_b_count = (
@@ -662,6 +678,9 @@ class ChallengeMonitorService:
         resolution_method = str(challenge.resolution_method or "").upper()
         resolution_source = str(challenge.resolution_source or "").upper()
         is_price_feed = resolution_method.endswith("PRICE_FEED") or resolution_source == "PRICE_FEED"
+
+        if operation == "settle_onchain" and challenge.status != ChallengeStatus.RESOLVED.value:
+            raise ValueError("Resolve the challenge in the database before settling it on-chain")
 
         if challenge.status == ChallengeStatus.OPEN.value:
             if is_price_feed:
@@ -717,7 +736,9 @@ class ChallengeMonitorService:
         settlement_succeeded = False
         settlement_note = None
 
-        if mode == "PVP" and not challenger_wallet:
+        if operation == "resolve_db":
+            settlement_note = "Database resolution completed; on-chain settlement was not requested"
+        elif mode == "PVP" and not challenger_wallet:
             settlement_note = "PVP challenge has no challenger; no on-chain pot was settled"
         elif not challenge_pda or not creator_wallet:
             settlement_note = "Missing on-chain challenge PDA or creator wallet"
@@ -746,6 +767,44 @@ class ChallengeMonitorService:
             "settlement_succeeded": settlement_succeeded,
             "settlement_note": settlement_note,
         }
+
+    async def withdraw_challenge_funds(
+        self, challenge_id: int, recipient_wallet: str, amount: int
+    ) -> dict:
+        """Invoke the contract's dedicated emergency withdrawal authority."""
+        challenge = await self._get_challenge_service().get_challenge(challenge_id)
+        if not challenge:
+            raise ValueError("Challenge not found")
+        onchain = (challenge.metadata or {}).get("onchain") or {}
+        challenge_pda = onchain.get("challenge_pda")
+        if not challenge_pda:
+            raise ValueError("Challenge has no on-chain PDA")
+
+        from config import get_settings
+        settings = get_settings()
+        settlement_url = settings.settlement_service_url.rstrip("/")
+        if not settlement_url or not settings.settlement_api_secret:
+            raise RuntimeError("Settlement service is not configured")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{settlement_url}/admin-withdraw",
+                json={
+                    "challengePda": challenge_pda,
+                    "recipientPubkey": recipient_wallet,
+                    "amount": amount,
+                },
+                headers={"x-settlement-api-key": settings.settlement_api_secret},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                body = await resp.json()
+                if resp.status != 200 or not body.get("success"):
+                    raise RuntimeError(body.get("error") or "Emergency withdrawal failed")
+                return {
+                    "challenge_id": challenge_id,
+                    "recipient_wallet": recipient_wallet,
+                    "amount": amount,
+                    **body,
+                }
 
     async def _get_current_price(self, symbol: str) -> float | None:
         """
