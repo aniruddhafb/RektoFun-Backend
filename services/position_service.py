@@ -126,9 +126,21 @@ class PositionService:
                     metadata["onchain"] = onchain_meta
                     challenger_wallet = user.pubkey
 
+            new_pool_size = (challenge.pool_size or 0) + bet
+            new_participants = (
+                (challenge.participants or 1) + 1
+                if position.creator != challenge.creator
+                else challenge.participants
+            )
+
             await challenge_service.update_challenge(
                 position.challenge_id,
-                ChallengeUpdate(bet_info=bet_info, metadata=metadata)
+                ChallengeUpdate(
+                    bet_info=bet_info,
+                    metadata=metadata,
+                    pool_size=new_pool_size,
+                    participants=new_participants,
+                )
             )
 
             if challenger_wallet:
