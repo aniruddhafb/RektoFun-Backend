@@ -12,7 +12,7 @@ router = APIRouter(prefix="/activity", tags=["activity"])
 
 ACTIVITY_CHALLENGE_FIELDS = (
     "id,statement,ticker,initial_bet,pool_size,resolution_source,creator,category,"
-    "participants,status,mode,expiry,resolution_date,created_at,bet_info,"
+    "participants,status,mode,result,expiry,resolution_date,resolved_at,created_at,bet_info,"
     "metadata"
 )
 ACTIVITY_POSITION_FIELDS = "id,challenge_id,creator,created_at"
@@ -79,6 +79,13 @@ async def list_activity(
             if user_id
         }
         for challenge in challenges:
+            if str(challenge.get("status") or "").upper() == "RESOLVED" and str(challenge.get("mode") or "").upper() == "PVP":
+                winning_side = str(challenge.get("result") or "").upper()
+                winner_id = challenge.get("creator") if winning_side == "TEAM_A" else (
+                    (((challenge.get("bet_info") or {}).get("highest_bet") or {}).get("TEAM_B") or {}).get("id")
+                )
+                if winner_id:
+                    user_ids.add(winner_id)
             for event in (challenge.get("metadata") or {}).get("activity_events", []):
                 if isinstance(event, dict) and event.get("user_id"):
                     user_ids.add(event["user_id"])
@@ -110,6 +117,23 @@ async def list_activity(
         # Related challenges fetched for a user's positions must also contribute
         # that user's payout/refund events, without creating duplicate lifecycle events.
         for challenge in challenges:
+            if str(challenge.get("status") or "").lower() == "resolved" and str(challenge.get("mode") or "").upper() == "PVP":
+                winning_side = str(challenge.get("result") or "").upper()
+                winner_id = challenge.get("creator") if winning_side == "TEAM_A" else (
+                    (((challenge.get("bet_info") or {}).get("highest_bet") or {}).get("TEAM_B") or {}).get("id")
+                )
+                if winner_id:
+                    team_count = (challenge.get("bet_info") or {}).get("team_count") or {}
+                    recorded_pool = sum(
+                        float((team_count.get(side) or {}).get("total_amount") or 0)
+                        for side in ("TEAM_A", "TEAM_B")
+                    )
+                    events.append({
+                        "id": f"won-{challenge['id']}", "type": "won",
+                        "occurredAt": challenge.get("resolved_at") or challenge.get("created_at"),
+                        "amount": recorded_pool or challenge.get("pool_size") or challenge.get("initial_bet") or 0,
+                        "challenge": challenge, "actor": users.get(winner_id),
+                    })
             for history in (challenge.get("metadata") or {}).get("activity_events", []):
                 if not isinstance(history, dict) or history.get("type") not in {"redeemed", "refunded"}:
                     continue

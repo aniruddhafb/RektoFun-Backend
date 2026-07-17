@@ -10,7 +10,8 @@ class NotificationResponse(BaseModel):
     actor_id: int
     challenge_id: Optional[int] = None
     event_type: Literal[
-        "challenge_created", "challenge_joined", "user_followed", "user_followed_back"
+        "challenge_created", "challenge_joined", "user_followed", "user_followed_back",
+        "challenge_won",
     ]
     message: str
     is_read: bool = False

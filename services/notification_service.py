@@ -72,6 +72,48 @@ class NotificationService:
             # Following should still succeed if a notification cannot be created.
             logger.error("Failed to notify user %s about follower %s: %s", recipient_id, actor_id, error)
 
+    async def notify_pvp_winner(self, challenge: dict) -> None:
+        """Notify the winner once when a contested PVP challenge is resolved."""
+        try:
+            if str(challenge.get("mode") or "").upper() != "PVP":
+                return
+            winning_side = str(challenge.get("result") or "").upper()
+            if winning_side not in {"TEAM_A", "TEAM_B"}:
+                return
+            if winning_side == "TEAM_A":
+                winner_id = challenge.get("creator")
+            else:
+                winner_id = (
+                    ((challenge.get("bet_info") or {}).get("highest_bet") or {})
+                    .get("TEAM_B", {})
+                    .get("id")
+                )
+            if not winner_id:
+                return
+            winner = self.db.table("user").select("id,username").eq("id", winner_id).limit(1).execute()
+            if not winner.data:
+                return
+            team_count = (challenge.get("bet_info") or {}).get("team_count") or {}
+            recorded_pool = sum(
+                float((team_count.get(side) or {}).get("total_amount") or 0)
+                for side in ("TEAM_A", "TEAM_B")
+            )
+            amount = float(recorded_pool or challenge.get("total_pool") or challenge.get("pool_size") or challenge.get("initial_bet") or 0)
+            amount_label = f"{amount:,.2f}".rstrip("0").rstrip(".")
+            row = {
+                "recipient_id": winner_id,
+                "actor_id": winner_id,
+                "challenge_id": challenge.get("id"),
+                "event_type": "challenge_won",
+                "message": f"You won {amount_label} USDC in a PVP challenge!",
+                "event_key": f"challenge_won:{challenge.get('id')}:{winner_id}",
+            }
+            self.db.table("notification").upsert(
+                row, on_conflict="event_key", ignore_duplicates=True
+            ).execute()
+        except Exception as error:
+            logger.error("Failed to notify winner for challenge %s: %s", challenge.get("id"), error)
+
     async def list_for_wallet(self, wallet: str, limit: int = 50) -> NotificationListResponse:
         user_result = self.db.table("user").select("id").eq("pubkey", wallet).limit(1).execute()
         if not user_result.data:

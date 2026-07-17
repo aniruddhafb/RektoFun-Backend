@@ -662,6 +662,10 @@ class ChallengeService:
                 update_data["final_price"] = price_to_use
             if new_status == ChallengeStatus.RESOLVED:
                 update_data["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                if price_to_use is not None and challenge.target is not None:
+                    direction = str(challenge.direction or "").upper()
+                    creator_wins = price_to_use >= challenge.target if direction.endswith("UP") else price_to_use <= challenge.target
+                    update_data["result"] = "TEAM_A" if creator_wins else "TEAM_B"
             
             # Update in database
             result = (
@@ -675,6 +679,9 @@ class ChallengeService:
                 return None
             
             updated_challenge = result.data[0]
+            if new_status == ChallengeStatus.RESOLVED:
+                from services.notification_service import get_notification_service
+                await get_notification_service(self.db).notify_pvp_winner(updated_challenge)
             logger.info(f"Updated challenge {challenge_id} status to {new_status.value}")
             return ChallengeResponse(**updated_challenge)
             
