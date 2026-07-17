@@ -87,7 +87,29 @@ class ChallengeService:
         self.table = "challenge"
 
     def with_category_images(self, challenges: list[dict]) -> list[dict]:
-        """Attach the configured category artwork to challenge API rows."""
+        """Attach current display profiles and configured artwork to API rows."""
+        profile_ids = {
+            entry.get("id")
+            for challenge in challenges
+            for entry in ((challenge.get("bet_info") or {}).get("highest_bet") or {}).values()
+            if isinstance(entry, dict) and entry.get("id") is not None
+        }
+        if profile_ids:
+            profiles = self.db.table("user").select(
+                "id,username,pubkey,profile_image,twitter_username,user_type"
+            ).in_("id", list(profile_ids)).execute().data or []
+            profiles_by_id = {str(profile["id"]): profile for profile in profiles}
+            for challenge in challenges:
+                highest_bets = ((challenge.get("bet_info") or {}).get("highest_bet") or {})
+                for side, snapshot in highest_bets.items():
+                    if not isinstance(snapshot, dict):
+                        continue
+                    current = profiles_by_id.get(str(snapshot.get("id")))
+                    if current:
+                        # Keep bet-specific data but never serve stale identity
+                        # fields captured when the position was first placed.
+                        highest_bets[side] = {**snapshot, **current}
+
         category_names = {
             str(value).strip().casefold()
             for challenge in challenges

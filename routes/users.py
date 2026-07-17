@@ -148,6 +148,7 @@ async def get_leaderboard(
     search: Optional[str] = Query(None, max_length=100),
     sort: str = Query("pnl", pattern="^(rank|win_rate|won|lost|pnl|volume)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
+    verification: str = Query("all", pattern="^(all|x|kol)$"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -156,7 +157,7 @@ async def get_leaderboard(
     try:
         return await LeaderboardService(db).get_leaderboard(
             period=period, limit=limit, offset=offset, search=search,
-            sort=sort, order=order,
+            sort=sort, order=order, verification=verification,
         )
     except Exception as e:
         logger.error(f"Failed to get leaderboard: {e}")

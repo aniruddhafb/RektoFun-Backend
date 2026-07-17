@@ -126,7 +126,14 @@ class PositionService:
                     metadata["onchain"] = onchain_meta
                     challenger_wallet = user.pubkey
 
-            new_pool_size = (challenge.pool_size or 0) + bet
+            # pool_size is seeded with initial_bet when the challenge is created.
+            # Adding the creator's automatically-created position to that value
+            # counts the opening stake twice. The side totals are the canonical
+            # record of every position, including that opening position.
+            new_pool_size = sum(
+                int((entry or {}).get("total_amount") or 0)
+                for entry in team_count.values()
+            )
             new_participants = (
                 (challenge.participants or 1) + 1
                 if position.creator != challenge.creator
