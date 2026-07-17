@@ -2,11 +2,14 @@
 Challenge models for request/response validation and data transfer.
 """
 
+import re
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from models.user import UserResponse
 
 
 class ChallengeStatus(str, Enum):
@@ -47,7 +50,7 @@ class ChallengeBase(BaseModel):
     statement: Optional[str] = Field(None, description="The challenge statement/question")
     ticker: Optional[str] = Field(None, description="The ticker symbol for the challenge")
     trading_pair: Optional[str] = Field(None, description="The trading pair symbol (e.g., BTCUSDT)")
-    target: Optional[int] = Field(None, description="Target value for price-based challenges")
+    target: Optional[float] = Field(None, description="Target value for price-based challenges")
     initial_bet: Optional[int] = Field(None, description="Initial bet amount")
     pool_size: Optional[int] = Field(None, description="Total pool size")
     resolution_source: Optional[str] = Field(None, description="Source for resolving the challenge")
@@ -59,14 +62,40 @@ class ChallengeBase(BaseModel):
     mode: Optional[ChallengeMode] = Field(None, description="Challenge mode (PVP or TEAM)")
     result: Optional[Side] = Field(None, description="Result side if resolved")
     direction: Optional[Direction] = Field(None, description="Direction of the challenge (UP or DOWN)")
-    expiry: Optional[date] = Field(None, description="This is the date when new bets will no longer be accepted for the challenge")
+    expiry: Optional[datetime] = Field(None, description="This is the timestamp when new bets will no longer be accepted for the challenge")
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
-    final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
+    final_price: Optional[float] = Field(None, description="Final price of the asset when challenge was resolved or expired")
+    category: Optional[str] = Field(None, description="Category of the challenge")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet/twitter_username/user_type, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeCreate(ChallengeBase):
     """Model for creating a new challenge"""
-    pass
+
+    @field_validator("statement")
+    @classmethod
+    def remove_will_be_from_statement(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+
+        statement = re.sub(r"\bwill\s+be\b", "", value, flags=re.IGNORECASE)
+        return re.sub(r"\s{2,}", " ", statement).strip()
+
+    @field_validator("ticker")
+    @classmethod
+    def store_base_ticker_only(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+
+        return value.split("/", 1)[0].strip().upper()
+
+
+class ChallengeAvailabilityResponse(BaseModel):
+    """Whether a proposed challenge is sufficiently different from active ones."""
+    allowed: bool
+    reason: Optional[str] = None
+    available_at: Optional[datetime] = None
+    conflicting_challenge_ids: list[int] = Field(default_factory=list)
 
 
 class ChallengeUpdate(BaseModel):
@@ -74,7 +103,7 @@ class ChallengeUpdate(BaseModel):
     statement: Optional[str] = Field(None, description="The challenge statement/question")
     ticker: Optional[str] = Field(None, description="The ticker symbol for the challenge")
     trading_pair: Optional[str] = Field(None, description="The trading pair symbol (e.g., BTCUSDT)")
-    target: Optional[int] = Field(None, description="Target value for price-based challenges")
+    target: Optional[float] = Field(None, description="Target value for price-based challenges")
     initial_bet: Optional[int] = Field(None, description="Initial bet amount")
     pool_size: Optional[int] = Field(None, description="Total pool size")
     resolution_source: Optional[str] = Field(None, description="Source for resolving the challenge")
@@ -86,15 +115,21 @@ class ChallengeUpdate(BaseModel):
     mode: Optional[ChallengeMode] = Field(None, description="Challenge mode (PVP or TEAM)")
     result: Optional[Side] = Field(None, description="Result side if resolved")
     direction: Optional[Direction] = Field(None, description="Direction of the challenge (UP or DOWN)")
-    expiry: Optional[date] = Field(None, description="Expiry date for the challenge")
+    expiry: Optional[datetime] = Field(None, description="Expiry timestamp for the challenge")
     resolution_date: Optional[date] = Field(None, description="Date when the challenge will be resolved")
-    final_price: Optional[int] = Field(None, description="Final price of the asset when challenge was resolved or expired")
+    final_price: Optional[float] = Field(None, description="Final price of the asset when challenge was resolved or expired")
+    category: Optional[str] = Field(None, description="Category of the challenge")
+    bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet/twitter_username/user_type, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
 
 
 class ChallengeResponse(ChallengeBase):
     """Model for challenge response data"""
     id: int = Field(..., description="Unique challenge ID")
+    views: int = Field(0, ge=0, description="Number of times the challenge detail was opened")
     created_at: datetime = Field(..., description="Challenge creation timestamp")
+    resolved_at: Optional[datetime] = Field(None, description="Exact UTC resolution timestamp")
+    category_image: Optional[str] = Field(None, description="Image associated with the challenge category")
+    creator_details: Optional[UserResponse] = Field(None, description="Details of the user who created the challenge")
 
     class Config:
         from_attributes = True
@@ -104,3 +139,10 @@ class ChallengeListResponse(BaseModel):
     """Model for list of challenges response"""
     challenges: list[ChallengeResponse]
     total: int = Field(..., description="Total number of challenges")
+    has_more: bool = Field(False, description="Whether another page is available")
+
+
+class ChallengeViewResponse(BaseModel):
+    """Response returned after recording a challenge view."""
+    challenge_id: int = Field(..., description="Viewed challenge ID")
+    views: int = Field(..., ge=0, description="Updated challenge view count")

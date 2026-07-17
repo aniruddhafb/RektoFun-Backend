@@ -7,7 +7,12 @@ from typing import Optional
 
 from supabase import Client
 
-from models.position import PositionCreate, PositionUpdate, PositionResponse, Side
+from models.position import ChallengeParticipantPosition, PositionCreate, PositionUpdate, PositionResponse, Side
+from models.challenge import ChallengeUpdate
+from services.challenge_service import get_challenge_service
+from services.user_service import get_user_service
+from services.category_service import CategoryService
+from services.notification_service import get_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +46,111 @@ class PositionService:
             
             created_position = result.data[0]
             logger.info(f"Created position with ID: {created_position['id']}")
-            return PositionResponse(**created_position)
-            
+            position = PositionResponse(**created_position)
+
+            if position.challenge_id and position.side and position.creator:
+                await self._update_bet_info(position)
+                challenge = await get_challenge_service(self.db).get_challenge(position.challenge_id)
+                if challenge and challenge.creator != position.creator:
+                    await get_notification_service(self.db).notify_followers(
+                        position.creator, position.challenge_id, "challenge_joined"
+                    )
+
+            return position
+
         except Exception as e:
             logger.error(f"Error creating position: {e}")
             raise
+
+    async def _update_bet_info(self, position: PositionResponse) -> None:
+        """
+        Update the parent challenge's bet_info for this position's side:
+        - highest_bet: the largest single bet seen so far on that side
+        - team_count: running total_bets (count) and total_amount (sum of bets) on that side
+        """
+        try:
+            challenge_service = get_challenge_service(self.db)
+            user_service = get_user_service(self.db)
+
+            challenge = await challenge_service.get_challenge(position.challenge_id)
+            if not challenge:
+                logger.warning(f"Challenge {position.challenge_id} not found; skipping bet_info update")
+                return
+
+            user = await user_service.get_user(position.creator)
+            if not user:
+                logger.warning(f"User {position.creator} not found; skipping bet_info update")
+                return
+
+            bet_info = dict(challenge.bet_info or {})
+            side_key = position.side.value
+            bet = position.bet or 0
+
+            team_count = dict(bet_info.get("team_count") or {})
+            side_count = dict(team_count.get(side_key) or {"total_bets": 0, "total_amount": 0})
+            side_count["total_bets"] = side_count.get("total_bets", 0) + 1
+            side_count["total_amount"] = side_count.get("total_amount", 0) + bet
+            team_count[side_key] = side_count
+            bet_info["team_count"] = team_count
+
+            highest_bet = dict(bet_info.get("highest_bet") or {})
+            existing = highest_bet.get(side_key)
+            if existing is None or bet > existing.get("bet", 0):
+                highest_bet[side_key] = {
+                    "id": user.id,
+                    "username": user.username,
+                    "profile_image": user.profile_image,
+                    "pubkey": user.pubkey,
+                    "bet": bet,
+                    "twitter_username": user.twitter_username,
+                    "user_type": user.user_type,
+                }
+                bet_info["highest_bet"] = highest_bet
+
+            # For PVP challenges, the challenger's wallet is only known once
+            # they join (the creator sets challenge_pda/creator_wallet at
+            # creation, but no one records the opponent's wallet anywhere
+            # else). Persist it here so the settlement flow can find it once
+            # the target is hit.
+            metadata = None
+            challenger_wallet = None
+            if (
+                challenge.mode == "PVP"
+                and position.creator != challenge.creator
+                and user.pubkey
+            ):
+                onchain_meta = dict((challenge.metadata or {}).get("onchain") or {})
+                if not onchain_meta.get("challenger_wallet"):
+                    onchain_meta["challenger_wallet"] = user.pubkey
+                    metadata = dict(challenge.metadata or {})
+                    metadata["onchain"] = onchain_meta
+                    challenger_wallet = user.pubkey
+
+            new_pool_size = (challenge.pool_size or 0) + bet
+            new_participants = (
+                (challenge.participants or 1) + 1
+                if position.creator != challenge.creator
+                else challenge.participants
+            )
+
+            await challenge_service.update_challenge(
+                position.challenge_id,
+                ChallengeUpdate(
+                    bet_info=bet_info,
+                    metadata=metadata,
+                    pool_size=new_pool_size,
+                    participants=new_participants,
+                )
+            )
+
+            if challenger_wallet:
+                from services.challenge_monitor_service import update_monitored_challenger_wallet
+                await update_monitored_challenger_wallet(position.challenge_id, challenger_wallet)
+
+            if challenge.category and bet:
+                CategoryService(self.db).increment_volume(challenge.category, bet)
+        except Exception as e:
+            logger.error(f"Failed to update bet_info for challenge {position.challenge_id}: {e}")
 
     async def get_position(self, position_id: int) -> Optional[PositionResponse]:
         """
@@ -77,7 +182,7 @@ class PositionService:
             logger.error(f"Error fetching position {position_id}: {e}")
             raise
 
-    async def get_positions_by_challenge(self, challenge_id: int) -> list[PositionResponse]:
+    async def get_positions_by_challenge(self, challenge_id: int) -> list[ChallengeParticipantPosition]:
         """
         Get all positions for a specific challenge.
         
@@ -93,12 +198,17 @@ class PositionService:
         try:
             result = (
                 self.db.table(self.table)
-                .select("*")
+                .select(
+                    "id,challenge_id,bet,side,creator,created_at,"
+                    "user:user!position_creator_fkey("
+                    "id,username,pubkey,profile_image,twitter_username,user_type)"
+                )
                 .eq("challenge_id", challenge_id)
+                .order("created_at", desc=True)
                 .execute()
             )
             
-            return [PositionResponse(**position) for position in result.data]
+            return [ChallengeParticipantPosition(**position) for position in (result.data or [])]
             
         except Exception as e:
             logger.error(f"Error fetching positions by challenge {challenge_id}: {e}")
@@ -161,7 +271,8 @@ class PositionService:
     async def list_positions(
         self,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        creator_id: int | None = None,
     ) -> list[PositionResponse]:
         """
         List positions with pagination.
@@ -177,17 +288,29 @@ class PositionService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*")
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*")
+            if creator_id is not None:
+                query = query.eq("creator", creator_id)
+            result = query.range(offset, offset + limit - 1).execute()
             
             return [PositionResponse(**position) for position in result.data]
             
         except Exception as e:
             logger.error(f"Error listing positions: {e}")
+            raise
+
+    async def list_joined_challenge_ids(self, creator_id: int) -> list[int]:
+        """Return only the challenge IDs joined by a user."""
+        try:
+            result = (
+                self.db.table(self.table)
+                .select("challenge_id")
+                .eq("creator", creator_id)
+                .execute()
+            )
+            return list({row["challenge_id"] for row in (result.data or []) if row.get("challenge_id") is not None})
+        except Exception as e:
+            logger.error(f"Error fetching joined challenge IDs for creator {creator_id}: {e}")
             raise
 
     async def update_position(
@@ -264,7 +387,7 @@ class PositionService:
             logger.error(f"Error deleting position {position_id}: {e}")
             raise
 
-    async def count_positions(self) -> int:
+    async def count_positions(self, creator_id: int | None = None) -> int:
         """
         Get total count of positions.
         
@@ -275,11 +398,10 @@ class PositionService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*", count="exact", head=True)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*", count="exact")
+            if creator_id is not None:
+                query = query.eq("creator", creator_id)
+            result = query.execute()
             
             return result.count or 0
             

@@ -3,7 +3,7 @@ User models for request/response validation and data transfer.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -14,12 +14,21 @@ class UserBase(BaseModel):
     email: Optional[EmailStr] = Field(None, description="User's email address")
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
+    twitter_profile_image: Optional[str] = Field(None, description="URL to user's linked X/Twitter profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
+    twitter_username: Optional[str] = Field(None, max_length=15, description="User's X/Twitter username")
+    referral_code: Optional[str] = Field(None, description="User's referral code")
+    referred_by: Optional[str] = Field(None, description="Referral code used by this user")
+    referrals: list[str] = Field(default_factory=list, description="Wallets referred by this user")
+    followers: list[int] = Field(default_factory=list, description="IDs of users following this user")
+    following: list[int] = Field(default_factory=list, description="IDs of users this user follows")
+    user_type: Literal["user", "moderator"] = Field("user", description="Account role; moderators earn a 40% referral fee share")
+    earnings: float = Field(0, ge=0, description="Total referral commission earned in USDC")
 
 
 class UserCreate(UserBase):
     """Model for creating a new user"""
-    pass
+    referrer_code: Optional[str] = Field(None, description="Referral code to apply after creating the user")
 
 
 class UserUpdate(BaseModel):
@@ -28,7 +37,9 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = Field(None, description="User's email address")
     pubkey: Optional[str] = Field(None, description="User's Solana public key")
     profile_image: Optional[str] = Field(None, description="URL to user's profile image")
+    twitter_profile_image: Optional[str] = Field(None, description="URL to user's linked X/Twitter profile image")
     bio: Optional[str] = Field(None, description="User's bio/description")
+    twitter_username: Optional[str] = Field(None, max_length=15, description="User's X/Twitter username")
 
 
 class UserResponse(UserBase):
@@ -40,7 +51,81 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class ProfileMetrics(BaseModel):
+    won: int = 0
+    lost: int = 0
+    win_rate: float = 0
+    pnl: float = 0
+    volume: float = 0
+
+
+class UserProfileResponse(BaseModel):
+    """Only the user data rendered by the public profile page."""
+    id: int
+    username: str | None = None
+    pubkey: str | None = None
+    profile_image: str | None = None
+    bio: str | None = None
+    twitter_username: str | None = None
+    created_at: datetime
+    followers: list[int] = Field(default_factory=list)
+    following: list[int] = Field(default_factory=list)
+    user_type: Literal["user", "moderator"] = "user"
+    metrics: ProfileMetrics = Field(default_factory=ProfileMetrics)
+
+
 class UserListResponse(BaseModel):
     """Model for list of users response"""
     users: list[UserResponse]
     total: int = Field(..., description="Total number of users")
+
+
+class LeaderboardUserResponse(UserResponse):
+    """A user enriched with realized challenge statistics."""
+    rank: int
+    won: int
+    lost: int
+    win_rate: float
+    pnl: float
+    volume: float
+
+
+class LeaderboardSummary(BaseModel):
+    total_users: int
+    total_challenges: int
+    total_volume: float
+    total_pnl: float
+
+
+class LeaderboardResponse(BaseModel):
+    users: list[LeaderboardUserResponse]
+    total: int
+    period: str
+    summary: LeaderboardSummary
+
+
+class UsernameCheckResponse(BaseModel):
+    """Model for username existence check response"""
+    username: str = Field(..., description="The username that was checked")
+    exists: bool = Field(..., description="Whether the username is already taken")
+
+
+class AcceptReferralRequest(BaseModel):
+    """Model for accepting a referral code"""
+    new_user_wallet: str = Field(..., description="Wallet/public key of the user accepting the referral")
+    referrer_code: str = Field(..., description="Referral code provided by the referrer")
+
+
+class ReferralRedemptionRequest(BaseModel):
+    """Request redemption of the connected wallet's referral earnings."""
+    wallet_address: str = Field(..., min_length=1)
+
+
+class ReferralHistoryResponse(BaseModel):
+    commissions: list[dict[str, Any]] = Field(default_factory=list)
+    redemptions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FollowRequest(BaseModel):
+    """Identify the user performing a follow action."""
+    follower_wallet: str = Field(..., min_length=1, description="Wallet/public key of the acting user")

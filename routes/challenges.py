@@ -4,7 +4,9 @@ Challenge API routes for CRUD operations.
 
 import logging
 import os
-from typing import Optional
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Header
 from supabase import Client
@@ -14,13 +16,16 @@ from models.challenge import (
     ChallengeUpdate,
     ChallengeResponse,
     ChallengeListResponse,
+    ChallengeViewResponse,
+    ChallengeAvailabilityResponse,
     ChallengeStatus,
     Direction
 )
 from models.position import PositionCreate, Side
-from services.database import get_db_client
-from services.challenge_service import get_challenge_service, ChallengeService
+from services.database import get_request_db_client as get_db_client
+from services.challenge_service import get_challenge_service, ChallengeService, DuplicateChallengeError
 from services.position_service import get_position_service
+from services.notification_service import get_notification_service
 from services.challenge_monitor_service import (
     monitor_new_challenge,
     stop_monitoring_challenge,
@@ -30,6 +35,26 @@ from services.challenge_monitor_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/challenges", tags=["challenges"])
+
+
+class AdminChallengeResolution(BaseModel):
+    creator_wins: Optional[bool] = None
+    final_price: Optional[float] = Field(default=None, gt=0)
+    operation: Literal["resolve_all", "resolve_db", "settle_onchain"] = "resolve_all"
+
+
+class AdminChallengeWithdrawal(BaseModel):
+    recipient_wallet: str = Field(min_length=32, max_length=44)
+    amount: int = Field(gt=0, description="USDC amount in base units (6 decimals)")
+
+
+@router.post("/availability", response_model=ChallengeAvailabilityResponse)
+async def check_challenge_availability(
+    challenge_data: ChallengeCreate,
+    db: Client = Depends(get_db_client),
+):
+    """Check duplicate rules without creating a challenge."""
+    return await get_challenge_service(db).check_availability(challenge_data)
 
 
 async def verify_cron_api_key(x_api_key: str = Header(..., description="API key for cron job authentication")):
@@ -79,14 +104,16 @@ async def create_challenge(
     - **mode**: Challenge mode - PVP or TEAM (optional)
     - **result**: Result side if resolved (optional)
     - **direction**: Direction of the challenge - UP or DOWN (optional)
-    - **expiry**: Expiry date for the challenge in YYYY-MM-DD format (optional)
+    - **expiry**: Expiry timestamp for the challenge in ISO 8601 format (optional)
     - **resolution_date**: Date when the challenge will be resolved in YYYY-MM-DD format (optional)
+    - **category**: Category of the challenge (optional)
     """
     service = get_challenge_service(db)
     position_service = get_position_service(db)
     try:
         # Create the challenge first
         challenge = await service.create_challenge(challenge_data)
+        print("challenge", challenge)
         
         # Create a position for the challenge creator
         position_data = PositionCreate(
@@ -95,16 +122,26 @@ async def create_challenge(
             side=Side.TEAM_A,
             creator=challenge.creator
         )
-        await position_service.create_position(position_data)
-        
+        created_position = await position_service.create_position(position_data)
+        if challenge.creator:
+            await get_notification_service(db).notify_followers(
+                challenge.creator, challenge.id, "challenge_created"
+            )
+        print("created_position", created_position)
         # Start monitoring the challenge for price targets
-        # Only monitor if it has a ticker and target price
-        if challenge.ticker and challenge.target:
+        # Only monitor if it has a trading_pair and target price
+        if challenge.trading_pair and challenge.target:
             challenge_dict = challenge.model_dump()
             await monitor_new_challenge(challenge_dict)
             logger.info(f"Started monitoring challenge {challenge.id} for price target")
+            
         
         return challenge
+    except DuplicateChallengeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=e.availability.model_dump(mode="json"),
+        )
     except Exception as e:
         logger.error(f"Failed to create challenge: {e}")
         raise HTTPException(
@@ -122,6 +159,14 @@ async def create_challenge(
 async def list_challenges(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of challenges to return"),
     offset: int = Query(0, ge=0, description="Number of challenges to skip"),
+    resolution_source: Optional[str] = Query(None, description="Filter by resolution source"),
+    created_by: Optional[int] = Query(None, description="Filter by creator user ID"),
+    open_first: bool = Query(False, description="Return OPEN challenges before other statuses"),
+    challenge_status: Optional[ChallengeStatus] = Query(None, alias="status", description="Filter by challenge status"),
+    expiring_soon: bool = Query(False, description="Return only unexpired OPEN challenges, soonest first"),
+    search: Optional[str] = Query(None, min_length=1, max_length=100, description="Search challenge text or ticker"),
+    joinable: bool = Query(False, description="Return only challenges currently open to new participants"),
+    include_total: bool = Query(True, description="Run an exact count query (disable for infinite scrolling)"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -129,14 +174,118 @@ async def list_challenges(
     
     - **limit**: Maximum number of challenges to return (default: 100, max: 1000)
     - **offset**: Number of challenges to skip for pagination (default: 0)
+    - **resolution_source**: Optional resolution source filter (for example, PRICE_FEED)
     """
     service = get_challenge_service(db)
     try:
-        challenges = await service.list_challenges(limit=limit, offset=offset)
-        total = await service.count_challenges()
-        return ChallengeListResponse(challenges=challenges, total=total)
+        # Infinite-scroll clients only need to know whether another page exists.
+        # Fetching one extra row avoids an exact COUNT over the filtered table.
+        fetch_limit = limit if include_total else limit + 1
+        challenges = await service.list_challenges(
+            limit=fetch_limit,
+            offset=offset,
+            resolution_source=resolution_source,
+            creator_id=created_by,
+            open_first=open_first,
+            status_filter=challenge_status,
+            expiring_soon=expiring_soon,
+            search=search,
+            joinable=joinable,
+        )
+        has_more = len(challenges) > limit
+        challenges = challenges[:limit]
+        if include_total:
+            total = await service.count_challenges(
+                resolution_source=resolution_source,
+                creator_id=created_by,
+                status_filter=challenge_status,
+                expiring_soon=expiring_soon,
+                search=search,
+                joinable=joinable,
+            )
+            has_more = offset + len(challenges) < total
+        else:
+            total = offset + len(challenges) + (1 if has_more else 0)
+        return ChallengeListResponse(challenges=challenges, total=total, has_more=has_more)
     except Exception as e:
         logger.error(f"Failed to list challenges: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve challenges"
+        )
+
+
+@router.get(
+    "/monitor/active-streams",
+    summary="Get active subscribed streams",
+    description="Retrieve all currently active subscribed streams (trading pairs) being monitored via WebSocket"
+)
+async def get_active_subscribed_streams():
+    """
+    Get all active subscribed streams being monitored by the Challenge Monitor Service.
+    
+    Returns a list of active challenges with their trading pairs and monitoring details.
+    """
+    try:
+        monitor = get_challenge_monitor()
+        active_challenges = monitor.get_active_challenges()
+        
+        # Extract unique subscribed streams (trading pairs)
+        # trading_pair holds the normalized Binance symbol (e.g. "BTCUSDC")
+        # raw_trading_pair holds the original value from DB (e.g. "BTC/USDC")
+        subscribed_streams = {}
+        for challenge in active_challenges:
+            symbol = challenge.get("trading_pair")  # normalized Binance symbol
+            raw_pair = challenge.get("raw_trading_pair")  # original DB value
+            if symbol:
+                if symbol not in subscribed_streams:
+                    subscribed_streams[symbol] = {
+                        "symbol": symbol,
+                        "trading_pair": raw_pair,
+                        "ticker": challenge.get("ticker"),
+                        "challenges": []
+                    }
+                subscribed_streams[symbol]["challenges"].append({
+                    "challenge_id": challenge.get("challenge_id"),
+                    "target": challenge.get("target"),
+                    "direction": challenge.get("direction"),
+                    "created_at": challenge.get("created_at")
+                })
+
+        return {
+            "total_streams": len(subscribed_streams),
+            "total_monitored_challenges": len(active_challenges),
+            "streams": list(subscribed_streams.values())
+        }
+    except Exception as e:
+        logger.error(f"Failed to get active subscribed streams: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve active subscribed streams"
+        )
+
+
+@router.get(
+    "/by-creator/{creator_id}",
+    response_model=list[ChallengeResponse],
+    summary="Get challenges by creator",
+    description="Retrieve all challenges created by a specific user"
+)
+async def get_challenges_by_creator(
+    creator_id: int,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Get all challenges created by a specific user.
+    
+    - **creator_id**: The ID of the user who created the challenges
+    """
+    service = get_challenge_service(db)
+    try:
+        challenges = await service.get_challenges_by_creator(creator_id)
+        return challenges
+    except Exception as e:
+        logger.error(f"Failed to get challenges by creator {creator_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve challenges"
@@ -177,30 +326,32 @@ async def get_challenge(
         )
 
 
-@router.get(
-    "/by-creator/{creator_id}",
-    response_model=list[ChallengeResponse],
-    summary="Get challenges by creator",
-    description="Retrieve all challenges created by a specific user"
+@router.post(
+    "/{challenge_id}/view",
+    response_model=ChallengeViewResponse,
+    summary="Record a challenge view",
+    description="Atomically increment the view count when challenge details are opened"
 )
-async def get_challenges_by_creator(
-    creator_id: int,
+async def record_challenge_view(
+    challenge_id: int,
     db: Client = Depends(get_db_client)
 ):
-    """
-    Get all challenges created by a specific user.
-    
-    - **creator_id**: The ID of the user who created the challenges
-    """
     service = get_challenge_service(db)
     try:
-        challenges = await service.get_challenges_by_creator(creator_id)
-        return challenges
+        views = await service.increment_views(challenge_id)
+        if views is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Challenge with ID {challenge_id} not found"
+            )
+        return ChallengeViewResponse(challenge_id=challenge_id, views=views)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to get challenges by creator {creator_id}: {e}")
+        logger.error(f"Failed to record view for challenge {challenge_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve challenges"
+            detail="Failed to record challenge view"
         )
 
 
@@ -225,6 +376,33 @@ async def get_challenges_by_status(
         return challenges
     except Exception as e:
         logger.error(f"Failed to get challenges by status {status}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve challenges"
+        )
+
+
+@router.get(
+    "/by-category/{category}",
+    response_model=list[ChallengeResponse],
+    summary="Get challenges by category",
+    description="Retrieve all challenges belonging to a specific category"
+)
+async def get_challenges_by_category(
+    category: str,
+    db: Client = Depends(get_db_client)
+):
+    """
+    Get all challenges belonging to a specific category.
+
+    - **category**: The category name to filter by
+    """
+    service = get_challenge_service(db)
+    try:
+        challenges = await service.get_challenges_by_category(category)
+        return challenges
+    except Exception as e:
+        logger.error(f"Failed to get challenges by category {category}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve challenges"
@@ -260,8 +438,9 @@ async def update_challenge(
     - **mode**: New mode (optional)
     - **result**: New result (optional)
     - **direction**: New direction - UP or DOWN (optional)
-    - **expiry**: New expiry date in YYYY-MM-DD format (optional)
+    - **expiry**: New expiry timestamp in ISO 8601 format (optional)
     - **resolution_date**: New resolution date in YYYY-MM-DD format (optional)
+    - **category**: New category (optional)
     """
     service = get_challenge_service(db)
     try:
@@ -315,52 +494,6 @@ async def delete_challenge(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete challenge"
-        )
-
-
-@router.get(
-    "/monitor/active-streams",
-    summary="Get active subscribed streams",
-    description="Retrieve all currently active subscribed streams (trading pairs) being monitored via WebSocket"
-)
-async def get_active_subscribed_streams():
-    """
-    Get all active subscribed streams being monitored by the Challenge Monitor Service.
-    
-    Returns a list of active challenges with their trading pairs and monitoring details.
-    """
-    try:
-        monitor = get_challenge_monitor()
-        active_challenges = monitor.get_active_challenges()
-        
-        # Extract unique subscribed streams (trading pairs)
-        subscribed_streams = {}
-        for challenge in active_challenges:
-            symbol = challenge.get("trading_pair")
-            if symbol:
-                if symbol not in subscribed_streams:
-                    subscribed_streams[symbol] = {
-                        "symbol": symbol,
-                        "ticker": challenge.get("ticker"),
-                        "challenges": []
-                    }
-                subscribed_streams[symbol]["challenges"].append({
-                    "challenge_id": challenge.get("challenge_id"),
-                    "target": challenge.get("target"),
-                    "direction": challenge.get("direction"),
-                    "created_at": challenge.get("created_at")
-                })
-        
-        return {
-            "total_streams": len(subscribed_streams),
-            "total_monitored_challenges": len(active_challenges),
-            "streams": list(subscribed_streams.values())
-        }
-    except Exception as e:
-        logger.error(f"Failed to get active subscribed streams: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve active subscribed streams"
         )
 
 
@@ -433,3 +566,50 @@ async def resolve_challenges_due_cron():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resolve challenges"
         )
+
+
+@router.post(
+    "/cron/resolve/{challenge_id}",
+    summary="Resolve one due challenge (authenticated)",
+    dependencies=[Depends(verify_cron_api_key)],
+)
+async def resolve_single_challenge_cron(
+    challenge_id: int,
+    resolution: AdminChallengeResolution,
+):
+    """Resolve exactly one due challenge and attempt its on-chain settlement."""
+    try:
+        return await get_challenge_monitor().resolve_challenge_by_id(
+            challenge_id=challenge_id,
+            creator_wins=resolution.creator_wins,
+            final_price=resolution.final_price,
+            operation=resolution.operation,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to resolve challenge {challenge_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/cron/withdraw/{challenge_id}",
+    summary="Emergency withdrawal from one challenge vault (authenticated)",
+    dependencies=[Depends(verify_cron_api_key)],
+)
+async def withdraw_single_challenge_cron(
+    challenge_id: int,
+    withdrawal: AdminChallengeWithdrawal,
+):
+    try:
+        return await get_challenge_monitor().withdraw_challenge_funds(
+            challenge_id, withdrawal.recipient_wallet, withdrawal.amount
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to withdraw challenge {challenge_id} funds: {exc}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc

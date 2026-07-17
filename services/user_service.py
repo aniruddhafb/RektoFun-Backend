@@ -3,11 +3,14 @@ User service for CRUD operations on the user table.
 """
 
 import logging
+import secrets
+import string
 from typing import Optional
 
 from supabase import Client
 
 from models.user import UserCreate, UserUpdate, UserResponse
+from services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,20 @@ class UserService:
     def __init__(self, db_client: Client):
         self.db = db_client
         self.table = "user"
+
+    def _normalize_referral_code(self, referral_code: str) -> str:
+        return referral_code.strip().upper()
+
+    async def _generate_referral_code(self) -> str:
+        alphabet = string.ascii_uppercase + string.digits
+
+        for _ in range(10):
+            code = "".join(secrets.choice(alphabet) for _ in range(8))
+            existing_user = await self.get_user_by_referral_code(code)
+            if not existing_user:
+                return code
+
+        raise Exception("Failed to generate a unique referral code")
 
     async def create_user(self, user_data: UserCreate) -> UserResponse:
         """
@@ -33,7 +50,14 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            data = user_data.model_dump(exclude_unset=True)
+            data = user_data.model_dump(exclude_unset=True, exclude_none=True, exclude={"referrer_code"})
+
+            if "referral_code" in data:
+                data["referral_code"] = self._normalize_referral_code(data["referral_code"])
+            else:
+                data["referral_code"] = await self._generate_referral_code()
+
+            data.setdefault("referrals", [])
             result = self.db.table(self.table).insert(data).execute()
             
             if not result.data:
@@ -45,6 +69,28 @@ class UserService:
             
         except Exception as e:
             logger.error(f"Error creating user: {e}")
+            raise
+
+    async def get_user_by_referral_code(self, referral_code: str) -> Optional[UserResponse]:
+        """
+        Get a user by their referral code.
+        """
+        try:
+            normalized_code = self._normalize_referral_code(referral_code)
+            result = (
+                self.db.table(self.table)
+                .select("*")
+                .eq("referral_code", normalized_code)
+                .execute()
+            )
+
+            if not result.data:
+                return None
+
+            return UserResponse(**result.data[0])
+
+        except Exception as e:
+            logger.error(f"Error fetching user by referral code {referral_code}: {e}")
             raise
 
     async def get_user(self, user_id: int) -> Optional[UserResponse]:
@@ -137,10 +183,56 @@ class UserService:
             logger.error(f"Error fetching user by email {email}: {e}")
             raise
 
+    async def get_user_by_username(self, username: str) -> Optional[UserResponse]:
+        """
+        Get a user by username.
+
+        Args:
+            username: The username to look up
+
+        Returns:
+            UserResponse if found, None otherwise
+
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            result = (
+                self.db.table(self.table)
+                .select("*")
+                .ilike("username", username)
+                .execute()
+            )
+
+            if not result.data:
+                return None
+
+            return UserResponse(**result.data[0])
+
+        except Exception as e:
+            logger.error(f"Error fetching user by username {username}: {e}")
+            raise
+
+    async def username_exists(self, username: str) -> bool:
+        """
+        Check whether a username is already taken.
+
+        Args:
+            username: The username to check
+
+        Returns:
+            True if a user with this username exists, False otherwise
+
+        Raises:
+            Exception: If database operation fails
+        """
+        return await self.get_user_by_username(username) is not None
+
     async def list_users(
         self,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        search: str | None = None,
     ) -> list[UserResponse]:
         """
         List users with pagination.
@@ -156,12 +248,13 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*")
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*")
+            if search:
+                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                query = query.or_(
+                    f"username.ilike.%{term}%,email.ilike.%{term}%,pubkey.ilike.%{term}%,twitter_username.ilike.%{term}%"
+                )
+            result = query.order("id").range(offset, offset + limit - 1).execute()
             
             return [UserResponse(**user) for user in result.data]
             
@@ -188,7 +281,10 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            data = user_data.model_dump(exclude_unset=True, exclude_none=True)
+            # Keep explicitly provided null values so nullable profile fields can
+            # be cleared (for example, disconnecting a linked X account).
+            # exclude_unset still prevents omitted fields from being overwritten.
+            data = user_data.model_dump(exclude_unset=True)
             
             if not data:
                 logger.warning("No data provided for user update")
@@ -211,6 +307,128 @@ class UserService:
         except Exception as e:
             logger.error(f"Error updating user {user_id}: {e}")
             raise
+
+    async def accept_referral(self, new_user_wallet: str, referrer_code: str) -> UserResponse:
+        """
+        Apply a referral code to a user and record the referred wallet on the referrer.
+        """
+        try:
+            normalized_code = self._normalize_referral_code(referrer_code)
+            new_user = await self.get_user_by_pubkey(new_user_wallet)
+            if not new_user:
+                raise ValueError("User accepting referral was not found")
+
+            # Referral attribution is immutable. Retried requests, or requests
+            # carrying a different code for an already-referred user, are a
+            # successful no-op and must never replace the original referrer.
+            if new_user.referred_by:
+                logger.info(
+                    "Skipping referral %s for user %s; referrer is already attached",
+                    normalized_code,
+                    new_user.id,
+                )
+                return new_user
+
+            referrer = await self.get_user_by_referral_code(normalized_code)
+            if not referrer:
+                raise ValueError("Referral code not found")
+
+            if new_user.pubkey == referrer.pubkey:
+                raise ValueError("You cannot redeem your own referral code")
+
+            referrals = list(referrer.referrals or [])
+            if new_user.pubkey and new_user.pubkey not in referrals:
+                referrals.append(new_user.pubkey)
+
+            self.db.table(self.table).update({"referred_by": normalized_code}).eq("id", new_user.id).execute()
+            self.db.table(self.table).update({"referrals": referrals}).eq("id", referrer.id).execute()
+
+            updated_user = await self.get_user(new_user.id)
+            if not updated_user:
+                raise Exception("Failed to load updated user after accepting referral")
+
+            logger.info(f"Accepted referral {normalized_code} for user {new_user.id}")
+            return updated_user
+
+        except Exception as e:
+            logger.error(f"Error accepting referral: {e}")
+            raise
+
+    async def set_following(
+        self, follower_wallet: str, target_wallet: str, *, follow: bool
+    ) -> UserResponse:
+        """Atomically follow or unfollow a user and return the updated target."""
+        follower = await self.get_user_by_pubkey(follower_wallet)
+        target = await self.get_user_by_pubkey(target_wallet)
+        if not follower or not target:
+            raise ValueError("Follower or target user was not found")
+        if follower.id == target.id:
+            raise ValueError("You cannot follow yourself")
+
+        was_following = any(
+            str(user_id) == str(follower.id) for user_id in (target.followers or [])
+        )
+        is_following_back = any(
+            str(user_id) == str(target.id) for user_id in (follower.followers or [])
+        )
+
+        self.db.rpc(
+            "set_user_following",
+            {
+                "p_follower_id": follower.id,
+                "p_target_id": target.id,
+                "p_follow": follow,
+            },
+        ).execute()
+        if follow and not was_following:
+            await NotificationService(self.db).notify_user_followed(
+                follower.id, target.id, followed_back=is_following_back
+            )
+        updated_target = await self.get_user(target.id)
+        if not updated_target:
+            raise Exception("Failed to load user after follow action")
+        return updated_target
+
+    async def request_referral_redemption(self, wallet_address: str) -> UserResponse:
+        """Atomically snapshot redeemable earnings and reset the user's balance."""
+        result = self.db.rpc(
+            "request_referral_redemption",
+            {"p_wallet_address": wallet_address},
+        ).execute()
+        if not result.data:
+            raise ValueError("At least 5 USDC is required to redeem")
+
+        updated_user = await self.get_user_by_pubkey(wallet_address)
+        if not updated_user:
+            raise Exception("Failed to load user after redemption request")
+        return updated_user
+
+    async def get_referral_history(self, wallet_address: str) -> dict:
+        """Return sanitized commission and redemption history for a wallet."""
+        user = await self.get_user_by_pubkey(wallet_address)
+        if not user:
+            raise ValueError("User was not found")
+
+        commissions = (
+            self.db.table("referral_commissions")
+            .select("amount,created_at")
+            .eq("referrer_id", user.id)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        redemptions = (
+            self.db.table("referral_redemption_requests")
+            .select("amount,status,requested_at")
+            .eq("user_id", user.id)
+            .order("requested_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        return {
+            "commissions": commissions.data or [],
+            "redemptions": redemptions.data or [],
+        }
 
     async def delete_user(self, user_id: int) -> bool:
         """
@@ -243,7 +461,7 @@ class UserService:
             logger.error(f"Error deleting user {user_id}: {e}")
             raise
 
-    async def count_users(self) -> int:
+    async def count_users(self, search: str | None = None) -> int:
         """
         Get total count of users.
         
@@ -254,11 +472,13 @@ class UserService:
             Exception: If database operation fails
         """
         try:
-            result = (
-                self.db.table(self.table)
-                .select("*", count="exact", head=True)
-                .execute()
-            )
+            query = self.db.table(self.table).select("*", count="exact")
+            if search:
+                term = search.strip().replace(",", " ").replace("(", " ").replace(")", " ")
+                query = query.or_(
+                    f"username.ilike.%{term}%,email.ilike.%{term}%,pubkey.ilike.%{term}%,twitter_username.ilike.%{term}%"
+                )
+            result = query.limit(0).execute()
             
             return result.count or 0
             
