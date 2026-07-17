@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from supabase import Client
 
 from services.database import get_request_db_client as get_db_client
+from services.challenge_service import get_challenge_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/activity", tags=["activity"])
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/activity", tags=["activity"])
 ACTIVITY_CHALLENGE_FIELDS = (
     "id,statement,ticker,initial_bet,pool_size,resolution_source,creator,category,"
     "participants,status,mode,expiry,resolution_date,created_at,bet_info,"
-    "resolves_at:metadata->composer->>resolves_at"
+    "metadata"
 )
 ACTIVITY_POSITION_FIELDS = "id,challenge_id,creator,created_at"
 ACTIVITY_USER_FIELDS = "id,username,pubkey,profile_image"
@@ -28,9 +29,8 @@ def _timestamp(value: str | None) -> float:
 
 
 def _compact_challenge(row: dict) -> dict:
-    """Keep the one composer value used by activity lifecycle calculations."""
-    resolves_at = row.pop("resolves_at", None)
-    row["metadata"] = {"composer": {"resolves_at": resolves_at}} if resolves_at else {}
+    """Normalize nullable JSON metadata."""
+    row["metadata"] = row.get("metadata") or {}
     return row
 
 
@@ -66,6 +66,10 @@ async def list_activity(
             )
             challenges.extend(_compact_challenge(row) for row in (related.data or []))
 
+        # Resolve artwork once for the whole feed page using the same category
+        # hierarchy/fallback logic as challenge cards.
+        challenges = get_challenge_service(db).with_category_images(challenges)
+
         user_ids = {
             user_id
             for user_id in (
@@ -74,6 +78,10 @@ async def list_activity(
             )
             if user_id
         }
+        for challenge in challenges:
+            for event in (challenge.get("metadata") or {}).get("activity_events", []):
+                if isinstance(event, dict) and event.get("user_id"):
+                    user_ids.add(event["user_id"])
         users = {}
         if user_ids:
             user_result = db.table("user").select(ACTIVITY_USER_FIELDS).in_("id", list(user_ids)).execute()
@@ -97,6 +105,22 @@ async def list_activity(
                 events.append({
                     "id": f"cancelled-{challenge['id']}", "type": "cancelled",
                     "occurredAt": occurred_at, "challenge": challenge, "actor": actor,
+                })
+
+        # Related challenges fetched for a user's positions must also contribute
+        # that user's payout/refund events, without creating duplicate lifecycle events.
+        for challenge in challenges:
+            for history in (challenge.get("metadata") or {}).get("activity_events", []):
+                if not isinstance(history, dict) or history.get("type") not in {"redeemed", "refunded"}:
+                    continue
+                actor_id = history.get("user_id")
+                events.append({
+                    "id": f"{history['type']}-{history.get('id') or challenge['id']}",
+                    "type": history["type"],
+                    "occurredAt": history.get("occurred_at") or challenge.get("created_at"),
+                    "amount": history.get("amount"),
+                    "challenge": challenge,
+                    "actor": users.get(actor_id),
                 })
 
         joined_challenge_ids = set()

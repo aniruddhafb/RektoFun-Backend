@@ -4,7 +4,7 @@ Challenge API routes for CRUD operations.
 
 import logging
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,12 @@ router = APIRouter(prefix="/challenges", tags=["challenges"])
 class AdminChallengeResolution(BaseModel):
     creator_wins: Optional[bool] = None
     final_price: Optional[float] = Field(default=None, gt=0)
+    operation: Literal["resolve_all", "resolve_db", "settle_onchain"] = "resolve_all"
+
+
+class AdminChallengeWithdrawal(BaseModel):
+    recipient_wallet: str = Field(min_length=32, max_length=44)
+    amount: int = Field(gt=0, description="USDC amount in base units (6 decimals)")
 
 
 @router.post("/availability", response_model=ChallengeAvailabilityResponse)
@@ -577,6 +583,7 @@ async def resolve_single_challenge_cron(
             challenge_id=challenge_id,
             creator_wins=resolution.creator_wins,
             final_price=resolution.final_price,
+            operation=resolution.operation,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -586,3 +593,23 @@ async def resolve_single_challenge_cron(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         ) from exc
+
+
+@router.post(
+    "/cron/withdraw/{challenge_id}",
+    summary="Emergency withdrawal from one challenge vault (authenticated)",
+    dependencies=[Depends(verify_cron_api_key)],
+)
+async def withdraw_single_challenge_cron(
+    challenge_id: int,
+    withdrawal: AdminChallengeWithdrawal,
+):
+    try:
+        return await get_challenge_monitor().withdraw_challenge_funds(
+            challenge_id, withdrawal.recipient_wallet, withdrawal.amount
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to withdraw challenge {challenge_id} funds: {exc}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc

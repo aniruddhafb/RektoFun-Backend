@@ -86,7 +86,7 @@ class ChallengeService:
         self.db = db_client
         self.table = "challenge"
 
-    def _with_category_images(self, challenges: list[dict]) -> list[dict]:
+    def with_category_images(self, challenges: list[dict]) -> list[dict]:
         """Attach the configured category artwork to challenge API rows."""
         category_names = {
             str(value).strip().casefold()
@@ -240,7 +240,7 @@ class ChallengeService:
                 except Exception as e:
                     logger.warning(f"Failed to increment challenges_count for category '{created_challenge['category']}': {e}")
 
-            return ChallengeResponse(**self._with_category_images([created_challenge])[0])
+            return ChallengeResponse(**self.with_category_images([created_challenge])[0])
             
         except Exception as e:
             logger.error(f"Error creating challenge: {e}")
@@ -270,7 +270,7 @@ class ChallengeService:
             if not result.data:
                 return None
             
-            return ChallengeResponse(**self._with_category_images([result.data[0]])[0])
+            return ChallengeResponse(**self.with_category_images([result.data[0]])[0])
             
         except Exception as e:
             logger.error(f"Error fetching challenge {challenge_id}: {e}")
@@ -436,7 +436,7 @@ class ChallengeService:
                 result = query.order(order_column, desc=not expiring_soon).range(
                     offset, offset + limit - 1
                 ).execute()
-                return [ChallengeResponse(**challenge) for challenge in self._with_category_images(result.data or [])]
+                return [ChallengeResponse(**challenge) for challenge in self.with_category_images(result.data or [])]
 
             # Preserve status priority across page boundaries. Challenges within
             # each status are ordered newest first.
@@ -476,7 +476,7 @@ class ChallengeService:
                 if len(rows) >= limit:
                     break
 
-            return [ChallengeResponse(**challenge) for challenge in self._with_category_images(rows)]
+            return [ChallengeResponse(**challenge) for challenge in self.with_category_images(rows)]
 
         except Exception as e:
             logger.error(f"Error listing challenges: {e}")
