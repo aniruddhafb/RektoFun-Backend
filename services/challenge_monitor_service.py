@@ -718,6 +718,8 @@ class ChallengeMonitorService:
             if not result.data:
                 raise RuntimeError("Challenge database update failed")
             challenge_data = result.data[0]
+            from services.notification_service import get_notification_service
+            await get_notification_service(service.db).notify_pvp_winner(challenge_data)
         else:
             challenge_data = challenge.model_dump(mode="json")
             if creator_wins is None:
