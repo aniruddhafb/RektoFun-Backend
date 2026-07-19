@@ -146,7 +146,7 @@ async def get_leaderboard(
     offset: int = Query(0, ge=0, description="Number of users to skip"),
     period: str = Query("all", pattern="^(1d|7d|30d|all)$"),
     search: Optional[str] = Query(None, max_length=100),
-    sort: str = Query("pnl", pattern="^(rank|win_rate|won|lost|pnl|volume)$"),
+    sort: str = Query("created_challenges", pattern="^(rank|created_challenges|win_rate|won|lost|pnl|volume)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
     verification: str = Query("all", pattern="^(all|x|kol)$"),
     db: Client = Depends(get_db_client)

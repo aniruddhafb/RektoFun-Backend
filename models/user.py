@@ -83,6 +83,7 @@ class UserListResponse(BaseModel):
 class LeaderboardUserResponse(UserResponse):
     """A user enriched with realized challenge statistics."""
     rank: int
+    created_challenges: int = 0
     won: int
     lost: int
     win_rate: float
