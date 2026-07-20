@@ -18,7 +18,7 @@ from services.challenge_monitor_service import (
     start_challenge_monitor,
     stop_challenge_monitor,
 )
-from routes import users, challenges, positions, email_subscription, categories, notifications, activity, admin, search, site_settings
+from routes import users, challenges, positions, email_subscription, categories, notifications, activity, admin, search, site_settings, rate_limits
 from security import body_limit_for, enforce_rate_limit, mutation_requires_internal_auth, require_internal_api_key
 
 # Configure logging
@@ -128,6 +128,7 @@ async def health_check():
 
 # Include routers
 app.include_router(users.router, prefix="/api", tags=["users"])
+app.include_router(rate_limits.router, prefix="/api", tags=["internal"])
 
 # Include challenge routes
 app.include_router(challenges.router, prefix="/api", tags=["challenges"])

@@ -89,33 +89,33 @@ class LeaderboardService:
                     # Role metadata must never prevent the core leaderboard
                     # response from loading (for example during schema rollout).
                     logger.exception("Failed to enrich leaderboard user roles")
+            created_counts: dict[str, int] = {}
+            page_size = 1000
+            start = 0
+            cutoff = None
+            if period != "all":
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    days={"1d": 1, "7d": 7, "30d": 30}[period]
+                )
+
+            while True:
+                query = self.db.table("challenge").select("creator")
+                if cutoff is not None:
+                    query = query.gte("created_at", cutoff.isoformat())
+                batch = query.range(start, start + page_size - 1).execute().data or []
+                for challenge in batch:
+                    creator = challenge.get("creator")
+                    if creator is not None:
+                        key = str(creator)
+                        created_counts[key] = created_counts.get(key, 0) + 1
+                if len(batch) < page_size:
+                    break
+                start += page_size
+
+            for user in users:
+                user["created_challenges"] = created_counts.get(str(user.get("id")), 0)
+
             if rank_by_created:
-                created_counts: dict[str, int] = {}
-                page_size = 1000
-                start = 0
-                cutoff = None
-                if period != "all":
-                    cutoff = datetime.now(timezone.utc) - timedelta(
-                        days={"1d": 1, "7d": 7, "30d": 30}[period]
-                    )
-
-                while True:
-                    query = self.db.table("challenge").select("creator")
-                    if cutoff is not None:
-                        query = query.gte("created_at", cutoff.isoformat())
-                    batch = query.range(start, start + page_size - 1).execute().data or []
-                    for challenge in batch:
-                        creator = challenge.get("creator")
-                        if creator is not None:
-                            key = str(creator)
-                            created_counts[key] = created_counts.get(key, 0) + 1
-                    if len(batch) < page_size:
-                        break
-                    start += page_size
-
-                for user in users:
-                    user["created_challenges"] = created_counts.get(str(user.get("id")), 0)
-
                 reverse = order == "desc"
                 users.sort(
                     key=lambda user: (
