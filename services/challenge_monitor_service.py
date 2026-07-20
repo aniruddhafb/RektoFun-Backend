@@ -10,7 +10,7 @@ and updates challenge statuses when:
 import asyncio
 import logging
 from typing import Dict, List, Optional, Set
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 import aiohttp
 
@@ -511,24 +511,27 @@ class ChallengeMonitorService:
             challenges_to_resolve = result.data or []
             logger.info(f"Found {len(challenges_to_resolve)} challenges ready for resolution")
             
-            # Get unique normalized symbols for price fetching
-            # Normalize trading_pair from DB (e.g. "BTC/USDC" -> "BTCUSDC") to match Binance format
+            # Normalize trading_pair from DB (e.g. "BTC/USDC" -> "BTCUSDC")
+            # to match Binance format.
             raw_to_symbol = {
                 c["trading_pair"]: c["trading_pair"].replace("/", "").upper()
                 for c in challenges_to_resolve
                 if c.get("trading_pair")
             }
-            symbols = list(set(raw_to_symbol.values()))
-
-            # Fetch current prices for all symbols
-            current_prices = {}
-            for symbol in symbols:
-                try:
-                    price = await self._get_current_price(symbol)
-                    if price:
-                        current_prices[symbol] = price
-                except Exception as e:
-                    logger.error(f"Error fetching price for {symbol}: {e}")
+            resolution_prices = {}
+            now = datetime.now(timezone.utc)
+            for challenge in challenges_to_resolve:
+                if challenge.get("status") != ChallengeStatus.OPEN.value:
+                    continue
+                symbol = raw_to_symbol.get(challenge.get("trading_pair"))
+                resolves_at = self._get_resolves_at(challenge)
+                if not symbol or not resolves_at or resolves_at > now:
+                    continue
+                cache_key = (symbol, resolves_at.isoformat())
+                if cache_key not in resolution_prices:
+                    resolution_prices[cache_key] = await self._get_price_at_time(
+                        symbol, resolves_at
+                    )
             
             # Resolve / settle each challenge
             for challenge in challenges_to_resolve:
@@ -536,6 +539,13 @@ class ChallengeMonitorService:
                 challenge_status = challenge.get("status")
                 raw_trading_pair = challenge.get("trading_pair")
                 symbol = raw_to_symbol.get(raw_trading_pair) if raw_trading_pair else None
+                exact_resolves_at = self._get_resolves_at(challenge)
+                if exact_resolves_at and exact_resolves_at > now:
+                    logger.info(
+                        f"Challenge {challenge_id} is due by date but its exact "
+                        f"resolves_at {exact_resolves_at.isoformat()} has not arrived"
+                    )
+                    continue
 
                 # Stop monitoring this challenge (only relevant for OPEN ones still in memory).
                 # RESOLVED challenges were already removed from _active_challenges at
@@ -551,10 +561,24 @@ class ChallengeMonitorService:
                                 del self._symbol_challenges[symbol]
 
                 if challenge_status == ChallengeStatus.OPEN.value:
-                    # Target was never hit — resolve with current market price
-                    final_price = current_prices.get(symbol)
+                    # Target was never hit. The winner is determined using the
+                    # first market trade at/after the contractual resolves_at,
+                    # not the price at the time this delayed job happens to run.
+                    resolves_at = exact_resolves_at
+                    if not resolves_at:
+                        logger.warning(
+                            f"Challenge {challenge_id} has no valid composer.resolves_at; "
+                            "it will remain OPEN"
+                        )
+                        continue
+                    final_price = resolution_prices.get(
+                        (symbol, resolves_at.isoformat())
+                    )
                     if final_price is None:
-                        logger.warning(f"No current price for {symbol}, challenge {challenge_id} will remain OPEN")
+                        logger.warning(
+                            f"No price at resolves_at for {symbol}, challenge "
+                            f"{challenge_id} will remain OPEN"
+                        )
                         # Re-add to monitoring only for OPEN challenges
                         if challenge_data:
                             async with self._lock:
@@ -688,9 +712,17 @@ class ChallengeMonitorService:
                 symbol = raw_pair.replace("/", "").upper()
                 if not symbol:
                     raise ValueError("Price-feed challenge has no trading pair")
-                final_price = await self._get_current_price(symbol)
+                resolves_at_dt = self._get_resolves_at(challenge)
+                if not resolves_at_dt:
+                    raise ValueError(
+                        "Price-feed challenge has no valid metadata.composer.resolves_at"
+                    )
+                final_price = await self._get_price_at_time(symbol, resolves_at_dt)
                 if final_price is None:
-                    raise RuntimeError(f"Could not fetch a current price for {symbol}")
+                    raise RuntimeError(
+                        f"Could not fetch the price for {symbol} at resolves_at "
+                        f"{resolves_at_dt.isoformat()}"
+                    )
                 target = challenge.target
                 if target is None:
                     raise ValueError("Price-feed challenge has no target")
@@ -808,9 +840,119 @@ class ChallengeMonitorService:
                     **body,
                 }
 
+    @staticmethod
+    def _get_resolves_at(challenge) -> datetime | None:
+        """Read and normalize the exact contractual resolution timestamp."""
+        if isinstance(challenge, dict):
+            metadata = challenge.get("metadata") or {}
+        else:
+            metadata = getattr(challenge, "metadata", None) or {}
+        raw_value = (metadata.get("composer") or {}).get("resolves_at")
+        if not raw_value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            logger.warning("Invalid composer.resolves_at value: %r", raw_value)
+            return None
+
+    async def _get_price_at_time(
+        self, symbol: str, resolves_at: datetime
+    ) -> float | None:
+        """
+        Return the first executed Binance spot trade at or after resolves_at.
+
+        A market has no continuously defined single price between trades. Using
+        the first actual trade at/after the contractual timestamp gives every
+        delayed resolution job the same reproducible result.
+        """
+        normalized_symbol = (symbol or "").replace("/", "").replace("-", "").upper()
+        if not normalized_symbol:
+            return None
+        if resolves_at.tzinfo is None:
+            resolves_at = resolves_at.replace(tzinfo=timezone.utc)
+        resolves_at = resolves_at.astimezone(timezone.utc)
+        if resolves_at > datetime.now(timezone.utc):
+            return None
+
+        start_ms = int(resolves_at.timestamp() * 1000)
+        # Search up to one hour after resolves_at. Liquid challenge markets
+        # normally return the first trade immediately; the wider window also
+        # handles less frequently traded pairs without changing the oracle rule.
+        end_ms = start_ms + (60 * 60 * 1000)
+        binance_hosts = (
+            "https://data-api.binance.vision",
+            "https://api.binance.com",
+            "https://api-gcp.binance.com",
+            "https://api1.binance.com",
+        )
+        params = {
+            "symbol": normalized_symbol,
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": 1,
+        }
+        timeout = aiohttp.ClientTimeout(total=8)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for host in binance_hosts:
+                url = f"{host}/api/v3/aggTrades"
+                try:
+                    async with session.get(url, params=params) as response:
+                        if response.status == 200:
+                            trades = await response.json()
+                            if trades:
+                                trade = trades[0]
+                                trade_time = int(trade.get("T", 0))
+                                price = float(trade.get("p", 0))
+                                if trade_time >= start_ms and price > 0:
+                                    logger.info(
+                                        "Historical oracle %s resolves_at=%s "
+                                        "trade_time=%s price=%s provider=%s",
+                                        normalized_symbol,
+                                        resolves_at.isoformat(),
+                                        datetime.fromtimestamp(
+                                            trade_time / 1000, timezone.utc
+                                        ).isoformat(),
+                                        price,
+                                        host,
+                                    )
+                                    return price
+                        body = (await response.text())[:300]
+                        logger.warning(
+                            "Historical price provider %s rejected %s: "
+                            "HTTP %s body=%s",
+                            host,
+                            normalized_symbol,
+                            response.status,
+                            body,
+                        )
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                    logger.warning(
+                        "Historical price provider %s failed for %s at %s: %s",
+                        host,
+                        normalized_symbol,
+                        resolves_at.isoformat(),
+                        exc,
+                    )
+
+        logger.error(
+            "All historical price providers failed for %s at %s",
+            normalized_symbol,
+            resolves_at.isoformat(),
+        )
+        return None
+
     async def _get_current_price(self, symbol: str) -> float | None:
         """
-        Get the current price for a trading pair using Binance REST API.
+        Get the current price for a trading pair.
+
+        Binance's primary API host is unavailable from some cloud regions. Try
+        its public market-data and alternate hosts before falling back to
+        Coinbase Exchange for the same spot pair.
         
         Args:
             symbol: The trading pair symbol (e.g., 'BTCUSDT')
@@ -818,21 +960,86 @@ class ChallengeMonitorService:
         Returns:
             Current price or None if unavailable
         """
-        try:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        price = float(data.get("price", 0))
-                        return price if price > 0 else None
-                    else:
-                        logger.warning(f"Failed to fetch price for {symbol}: HTTP {response.status}")
-                        return None
-                        
-        except Exception as e:
-            logger.error(f"Error getting current price for {symbol}: {e}")
+        normalized_symbol = (symbol or "").replace("/", "").replace("-", "").upper()
+        if not normalized_symbol:
             return None
+
+        binance_hosts = (
+            "https://data-api.binance.vision",
+            "https://api.binance.com",
+            "https://api-gcp.binance.com",
+            "https://api1.binance.com",
+        )
+        timeout = aiohttp.ClientTimeout(total=8)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for host in binance_hosts:
+                url = f"{host}/api/v3/ticker/price"
+                try:
+                    async with session.get(url, params={"symbol": normalized_symbol}) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            price = float(data.get("price", 0))
+                            if price > 0:
+                                logger.info(
+                                    "Fetched %s price from %s: %s",
+                                    normalized_symbol,
+                                    host,
+                                    price,
+                                )
+                                return price
+                        body = (await response.text())[:300]
+                        logger.warning(
+                            "Price provider %s rejected %s: HTTP %s body=%s",
+                            host,
+                            normalized_symbol,
+                            response.status,
+                            body,
+                        )
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                    logger.warning(
+                        "Price provider %s failed for %s: %s",
+                        host,
+                        normalized_symbol,
+                        exc,
+                    )
+
+            # Coinbase uses BASE-QUOTE product ids instead of Binance's
+            # concatenated symbol. Keep the quote currency unchanged so winner
+            # calculation is based on the market configured on the challenge.
+            quote_assets = ("USDC", "USDT", "USD", "BTC", "ETH", "EUR", "GBP")
+            quote = next(
+                (asset for asset in quote_assets if normalized_symbol.endswith(asset)),
+                None,
+            )
+            base = normalized_symbol[:-len(quote)] if quote else ""
+            if base and quote:
+                product_id = f"{base}-{quote}"
+                url = f"https://api.exchange.coinbase.com/products/{product_id}/ticker"
+                try:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            price = float(data.get("price", 0))
+                            if price > 0:
+                                logger.info(
+                                    "Fetched %s price from Coinbase Exchange: %s",
+                                    normalized_symbol,
+                                    price,
+                                )
+                                return price
+                        body = (await response.text())[:300]
+                        logger.warning(
+                            "Coinbase rejected %s: HTTP %s body=%s",
+                            product_id,
+                            response.status,
+                            body,
+                        )
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                    logger.warning("Coinbase failed for %s: %s", product_id, exc)
+
+        logger.error("All current-price providers failed for %s", normalized_symbol)
+        return None
 
     async def add_challenge(self, challenge: dict):
         """
