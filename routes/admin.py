@@ -1,5 +1,6 @@
 """Restricted operational endpoints used by the RektoFun admin panel."""
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -16,6 +17,10 @@ class RoleUpdate(BaseModel):
 
 class RedemptionStatusUpdate(BaseModel):
     status: Literal["pending", "paid", "rejected"]
+
+
+class ChallengeSettlementUpdate(BaseModel):
+    signature: str
 
 
 @router.patch("/users/{user_id}/role")
@@ -60,6 +65,38 @@ async def update_redemption_status(
     if not result.data:
         raise HTTPException(status_code=404, detail="Redemption request not found")
     return result.data[0]
+
+
+@router.post("/challenges/{challenge_id}/settlement")
+async def record_challenge_settlement(
+    challenge_id: int,
+    payload: ChallengeSettlementUpdate,
+    db: Client = Depends(get_db_client),
+):
+    """Persist a confirmed, admin-signed direct on-chain settlement."""
+    signature = payload.signature.strip()
+    if not signature or len(signature) > 128:
+        raise HTTPException(status_code=400, detail="Invalid settlement signature")
+
+    rows = db.table("challenge").select("status,metadata").eq("id", challenge_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    challenge = rows[0]
+    if str(challenge.get("status") or "").upper() != "RESOLVED":
+        raise HTTPException(status_code=409, detail="Challenge must be resolved in the database first")
+
+    metadata = dict(challenge.get("metadata") or {})
+    onchain = dict(metadata.get("onchain") or {})
+    onchain.update({
+        "settlement_status": "settled",
+        "settled_at": datetime.now(timezone.utc).isoformat(),
+        "settlement_signature": signature,
+    })
+    metadata["onchain"] = onchain
+    updated = db.table("challenge").update({"metadata": metadata}).eq("id", challenge_id).execute().data or []
+    if not updated:
+        raise HTTPException(status_code=500, detail="Settlement was confirmed but its database marker could not be saved")
+    return {"success": True, "challenge_id": challenge_id, "metadata": updated[0].get("metadata")}
 
 
 @router.post("/category-image")

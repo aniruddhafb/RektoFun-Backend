@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from supabase import Client
 
+from services.challenge_service import get_challenge_service
 from services.database import get_request_db_client as get_db_client
 from services.leaderboard_service import LeaderboardService
 logger = logging.getLogger(__name__)
@@ -85,8 +86,10 @@ async def search_modal(
             for user in (leaderboard.get("users") or [])
             if isinstance(user, dict) and user.get("id") is not None
         }
+        challenges = [_compact_challenge(row) for row in (challenge_result.data or [])]
+        challenges = get_challenge_service(db).with_category_images(challenges)
         return {
-            "challenges": [_compact_challenge(row) for row in (challenge_result.data or [])],
+            "challenges": challenges,
             "users": [_compact_user(row, metrics_by_id.get(str(row.get("id")))) for row in users],
         }
     except Exception as exc:

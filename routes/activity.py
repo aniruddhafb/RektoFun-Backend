@@ -34,6 +34,20 @@ def _compact_challenge(row: dict) -> dict:
     return row
 
 
+def _has_opponents(challenge: dict) -> bool:
+    """Use denormalized challenge state, not the paginated position window."""
+    bet_info = challenge.get("bet_info") or {}
+    highest_bet = bet_info.get("highest_bet") or {}
+    team_count = bet_info.get("team_count") or {}
+    onchain = (challenge.get("metadata") or {}).get("onchain") or {}
+    return bool(
+        highest_bet.get("TEAM_B")
+        or ((team_count.get("TEAM_B") or {}).get("total_bets") or 0) > 0
+        or (challenge.get("participants") or 0) > 1
+        or onchain.get("challenger_wallet")
+    )
+
+
 @router.get("", summary="Get the paginated live activity feed")
 async def list_activity(
     limit: int = Query(15, ge=1, le=50),
@@ -165,8 +179,11 @@ async def list_activity(
         for challenge in challenges[:len(challenges_result.data or [])]:
             expiry = challenge.get("expire_time") or challenge.get("expiry")
             challenge_status = str(challenge.get("status") or "").lower()
-            if challenge_status == "expired" or (
-                expiry and _timestamp(expiry) <= now and challenge["id"] not in joined_challenge_ids
+            has_opponents = _has_opponents(challenge)
+            if (challenge_status == "expired" and not has_opponents) or (
+                expiry and _timestamp(expiry) <= now
+                and not has_opponents
+                and challenge["id"] not in joined_challenge_ids
                 and challenge_status not in {"resolved", "cancelled"}
             ):
                 events.append({
