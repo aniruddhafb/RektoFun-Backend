@@ -42,7 +42,19 @@ class BinanceWebSocketClient:
     Manages multiple symbol subscriptions efficiently.
     """
 
-    BINANCE_WS_URL = "wss://stream.binance.com:9443/ws"
+    # Binance blocks or silently drops WebSocket handshakes from some cloud
+    # regions/IPs (HTTP 451, or a handshake that just times out) on the
+    # primary host. Mirror the REST fallback pattern in
+    # challenge_monitor_service.py's _get_current_price/_get_price_at_time by
+    # rotating through alternate hosts instead of retrying the same blocked
+    # one forever. data-stream.binance.vision is Binance's public
+    # "market data only" WS mirror — no auth needed, matches
+    # data-api.binance.vision used for REST.
+    BINANCE_WS_HOSTS = (
+        "wss://stream.binance.com:9443/ws",
+        "wss://stream.binance.com:443/ws",
+        "wss://data-stream.binance.vision/ws",
+    )
 
     def __init__(self):
         self._websocket = None
@@ -53,6 +65,7 @@ class BinanceWebSocketClient:
         self._reconnect_delay = 5  # seconds
         self._max_reconnect_delay = 60  # seconds
         self._message_id = 0
+        self._host_index = 0
 
     async def start(self):
         """Start the WebSocket client with automatic reconnection"""
@@ -62,6 +75,9 @@ class BinanceWebSocketClient:
                 await self._connect()
             except Exception as e:
                 logger.error(_c(_COLOR_ERROR, f"WebSocket error: {e}"))
+                # Rotate to the next mirror host — a rejected (451) or timed-out
+                # handshake on this host is likely to keep failing the same way.
+                self._host_index += 1
                 await asyncio.sleep(self._reconnect_delay)
                 # Exponential backoff
                 self._reconnect_delay = min(
@@ -71,10 +87,11 @@ class BinanceWebSocketClient:
 
     async def _connect(self):
         """Establish WebSocket connection and handle messages"""
-        logger.info(_c(_COLOR_INFO, "Connecting to Binance WebSocket"))
+        url = self.BINANCE_WS_HOSTS[self._host_index % len(self.BINANCE_WS_HOSTS)]
+        logger.info(_c(_COLOR_INFO, f"Connecting to Binance WebSocket ({url})"))
 
         try:
-            async with websockets.connect(self.BINANCE_WS_URL) as websocket:
+            async with websockets.connect(url, open_timeout=15) as websocket:
                 self._websocket = websocket
                 self._reconnect_delay = 5  # Reset on successful connection
 
@@ -92,7 +109,7 @@ class BinanceWebSocketClient:
             logger.warning(_c(_COLOR_WARN, "WebSocket connection closed"))
             raise
         except Exception as e:
-            logger.error(_c(_COLOR_ERROR, f"WebSocket error: {e}"))
+            logger.error(_c(_COLOR_ERROR, f"WebSocket error connecting to {url}: {e}"))
             raise
 
     async def _send_subscribe(self, symbols: list[str]):
