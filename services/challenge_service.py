@@ -131,6 +131,16 @@ class ChallengeService:
             for category in categories
         }
 
+        def base_asset(value: object) -> str:
+            name = str(value or "").strip().casefold()
+            return name.split("/", 1)[0].strip()
+
+        category_by_base_asset = {
+            base_asset(category.get("category")): category
+            for category in categories
+            if "/" in str(category.get("category") or "")
+        }
+
         def image_for(category: dict | None) -> str | None:
             metadata = (category or {}).get("metadata") or {}
             image = metadata.get("image_url") or metadata.get("category_image")
@@ -139,9 +149,10 @@ class ChallengeService:
         for challenge in challenges:
             # A broad challenge category such as "Crypto" may have a more
             # specific category row named after its pair, e.g. "DOGE/USDC".
+            trading_pair = challenge.get("trading_pair")
+            asset_name = base_asset(trading_pair) or base_asset(challenge.get("ticker"))
             candidate_names = (
-                challenge.get("trading_pair"),
-                challenge.get("category"),
+                trading_pair,
                 challenge.get("ticker"),
             )
             category = None
@@ -157,6 +168,22 @@ class ChallengeService:
                     break
                 if category is None and candidate:
                     category = candidate
+            if not image and asset_name:
+                asset_category = category_by_base_asset.get(asset_name)
+                asset_image = image_for(asset_category)
+                if asset_category:
+                    category = asset_category
+                if asset_image:
+                    image = asset_image
+            if not image:
+                broad_category = category_by_name.get(
+                    str(challenge.get("category") or "").strip().casefold()
+                )
+                broad_image = image_for(broad_category)
+                if broad_category:
+                    category = broad_category
+                if broad_image:
+                    image = broad_image
             visited: set[str] = set()
             while not image and category and category.get("parent_category"):
                 parent_name = str(category["parent_category"]).strip().casefold()
