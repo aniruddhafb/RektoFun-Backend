@@ -168,6 +168,51 @@ async def get_leaderboard(
 
 
 @router.get(
+    "/referral-leaderboard",
+    response_model=UserListResponse,
+    summary="Get the top referrers",
+)
+async def get_referral_leaderboard(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Client = Depends(get_db_client),
+):
+    """Rank users by successful referrals, independent of trading activity."""
+    try:
+        users = []
+        page_size = 1000
+        start = 0
+        while True:
+            batch = (
+                db.table("user")
+                .select("*")
+                .range(start, start + page_size - 1)
+                .execute()
+                .data
+                or []
+            )
+            users.extend(batch)
+            if len(batch) < page_size:
+                break
+            start += page_size
+
+        users.sort(
+            key=lambda item: (
+                -(len(item.get("referrals") or [])),
+                str(item.get("created_at") or ""),
+                int(item.get("id") or 0),
+            )
+        )
+        return UserListResponse(users=users[offset:offset + limit], total=len(users))
+    except Exception as exc:
+        logger.error("Failed to get referral leaderboard: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve referral leaderboard",
+        ) from exc
+
+
+@router.get(
     "/profile/{pubkey}",
     response_model=UserProfileResponse,
     summary="Get the compact public profile payload",
