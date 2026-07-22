@@ -26,6 +26,7 @@ from services.database import get_request_db_client as get_db_client
 from services.challenge_service import get_challenge_service, ChallengeService, DuplicateChallengeError
 from services.position_service import get_position_service
 from services.notification_service import get_notification_service
+from services.telegram_service import send_new_challenge_alert
 from services.challenge_monitor_service import (
     monitor_new_challenge,
     stop_monitoring_challenge,
@@ -123,6 +124,25 @@ async def create_challenge(
             creator=challenge.creator
         )
         created_position = await position_service.create_position(position_data)
+        creator_username = None
+        if challenge.creator:
+            try:
+                creator_rows = (
+                    db.table("user")
+                    .select("username")
+                    .eq("id", challenge.creator)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if creator_rows:
+                    creator_username = creator_rows[0].get("username")
+            except Exception as error:
+                logger.warning(
+                    "Could not load creator username for Telegram alert: %s", error
+                )
+        await send_new_challenge_alert(challenge, creator_username)
         if challenge.creator:
             await get_notification_service(db).notify_followers(
                 challenge.creator, challenge.id, "challenge_created"
