@@ -12,6 +12,7 @@ class NotificationResponse(BaseModel):
     event_type: Literal[
         "challenge_created", "challenge_joined", "user_followed", "user_followed_back",
         "challenge_won",
+        "challenge_received", "challenge_accepted", "challenge_declined",
     ]
     message: str
     is_read: bool = False

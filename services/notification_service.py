@@ -114,6 +114,34 @@ class NotificationService:
         except Exception as error:
             logger.error("Failed to notify winner for challenge %s: %s", challenge.get("id"), error)
 
+    async def notify_direct_challenge(
+        self, actor_id: int, recipient_id: int, challenge_id: int, event_type: str
+    ) -> None:
+        """Create an idempotent direct-challenge invitation/status notification."""
+        try:
+            actor = self.db.table("user").select("username").eq("id", actor_id).limit(1).execute()
+            actor_name = (actor.data or [{}])[0].get("username") or "Someone"
+            messages = {
+                "challenge_received": f"{actor_name} challenged you to a 1 vs 1 battle!",
+                "challenge_accepted": f"{actor_name} accepted your 1 vs 1 challenge!",
+                "challenge_declined": f"{actor_name} declined your 1 vs 1 challenge.",
+            }
+            if event_type not in messages:
+                return
+            row = {
+                "recipient_id": recipient_id,
+                "actor_id": actor_id,
+                "challenge_id": challenge_id,
+                "event_type": event_type,
+                "message": messages[event_type],
+                "event_key": f"{event_type}:{challenge_id}:{actor_id}:{recipient_id}",
+            }
+            self.db.table("notification").upsert(
+                row, on_conflict="event_key", ignore_duplicates=True
+            ).execute()
+        except Exception as error:
+            logger.error("Failed direct challenge notification for %s: %s", challenge_id, error)
+
     async def list_for_wallet(self, wallet: str, limit: int = 50) -> NotificationListResponse:
         user_result = self.db.table("user").select("id").eq("pubkey", wallet).limit(1).execute()
         if not user_result.data:

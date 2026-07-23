@@ -45,6 +45,10 @@ async def create_position(
     service = get_position_service(db)
     try:
         return await service.create_position(position_data)
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create position: {e}")
         raise HTTPException(

@@ -58,7 +58,10 @@ async def list_activity(
     """Build a small feed page server-side instead of downloading whole tables."""
     try:
         candidate_count = offset + limit + 1
-        challenges_query = db.table("challenge").select(ACTIVITY_CHALLENGE_FIELDS)
+        challenge_fields = ACTIVITY_CHALLENGE_FIELDS
+        if get_challenge_service(db).has_visibility_columns():
+            challenge_fields = f"{challenge_fields},visibility,challenged_user_id,invitation_status"
+        challenges_query = db.table("challenge").select(challenge_fields)
         positions_query = db.table("position").select(ACTIVITY_POSITION_FIELDS)
         if user_id is not None:
             challenges_query = challenges_query.eq("creator", user_id)
@@ -74,7 +77,7 @@ async def list_activity(
         if missing_ids:
             related = (
                 db.table("challenge")
-                .select(ACTIVITY_CHALLENGE_FIELDS)
+                .select(challenge_fields)
                 .in_("id", missing_ids)
                 .execute()
             )
@@ -92,6 +95,11 @@ async def list_activity(
             )
             if user_id
         }
+        user_ids.update(
+            challenge.get("challenged_user_id")
+            for challenge in challenges
+            if challenge.get("challenged_user_id")
+        )
         for challenge in challenges:
             if str(challenge.get("status") or "").upper() == "RESOLVED" and str(challenge.get("mode") or "").upper() == "PVP":
                 winning_side = str(challenge.get("result") or "").upper()
@@ -107,6 +115,9 @@ async def list_activity(
         if user_ids:
             user_result = db.table("user").select(ACTIVITY_USER_FIELDS).in_("id", list(user_ids)).execute()
             users = {user["id"]: user for user in (user_result.data or [])}
+        for challenge in challenges:
+            challenged_user_id = challenge.get("challenged_user_id")
+            challenge["challenged_user_details"] = users.get(challenged_user_id)
 
         challenge_by_id = {challenge["id"]: challenge for challenge in challenges}
         events = []

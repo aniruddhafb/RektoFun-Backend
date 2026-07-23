@@ -85,6 +85,20 @@ class ChallengeService:
     def __init__(self, db_client: Client):
         self.db = db_client
         self.table = "challenge"
+        self._visibility_columns_available: bool | None = None
+
+    def has_visibility_columns(self) -> bool:
+        """Allow old deployments to keep serving public challenges pre-migration."""
+        if self._visibility_columns_available is None:
+            try:
+                self.db.table(self.table).select("visibility").limit(1).execute()
+                self._visibility_columns_available = True
+            except Exception:
+                self._visibility_columns_available = False
+                logger.warning(
+                    "Direct challenge columns are unavailable; run migration 003_add_direct_challenges.sql"
+                )
+        return self._visibility_columns_available
 
     def with_category_images(self, challenges: list[dict]) -> list[dict]:
         """Attach current display profiles and configured artwork to API rows."""
@@ -94,12 +108,20 @@ class ChallengeService:
             for entry in ((challenge.get("bet_info") or {}).get("highest_bet") or {}).values()
             if isinstance(entry, dict) and entry.get("id") is not None
         }
+        profile_ids.update(
+            challenge.get("challenged_user_id")
+            for challenge in challenges
+            if challenge.get("challenged_user_id") is not None
+        )
         if profile_ids:
             profiles = self.db.table("user").select(
-                "id,username,pubkey,profile_image,twitter_username,user_type"
+                "id,created_at,username,pubkey,profile_image,twitter_username,user_type"
             ).in_("id", list(profile_ids)).execute().data or []
             profiles_by_id = {str(profile["id"]): profile for profile in profiles}
             for challenge in challenges:
+                challenged_user = profiles_by_id.get(str(challenge.get("challenged_user_id")))
+                if challenged_user:
+                    challenge["challenged_user_details"] = challenged_user
                 highest_bets = ((challenge.get("bet_info") or {}).get("highest_bet") or {})
                 for side, snapshot in highest_bets.items():
                     if not isinstance(snapshot, dict):
@@ -440,6 +462,7 @@ class ChallengeService:
         expiring_soon: bool = False,
         search: str | None = None,
         joinable: bool = False,
+        visibility_filter: str | None = None,
     ) -> list[ChallengeResponse]:
         """
         List challenges with pagination.
@@ -455,10 +478,18 @@ class ChallengeService:
             Exception: If database operation fails
         """
         try:
+            has_visibility_columns = self.has_visibility_columns()
+            list_select = CHALLENGE_LIST_SELECT
+            if has_visibility_columns:
+                list_select = f"{list_select},visibility,challenged_user_id,invitation_status"
             def build_query():
                 query = self.db.table(self.table).select(
-                    CHALLENGE_LIST_SELECT
+                    list_select
                 )
+                # Direct invitations remain accessible by ID and on creator
+                # profiles, but never leak into the public discovery feed.
+                if visibility_filter and has_visibility_columns:
+                    query = query.eq("visibility", visibility_filter)
                 if resolution_source:
                     query = query.ilike("resolution_source", resolution_source)
                 if creator_id is not None:
@@ -500,6 +531,8 @@ class ChallengeService:
             skipped = 0
             for challenge_status in status_order:
                 count_query = self.db.table(self.table).select("id", count="exact")
+                if visibility_filter and has_visibility_columns:
+                    count_query = count_query.eq("visibility", visibility_filter)
                 if resolution_source:
                     count_query = count_query.ilike("resolution_source", resolution_source)
                 if creator_id is not None:
@@ -621,6 +654,7 @@ class ChallengeService:
         expiring_soon: bool = False,
         search: str | None = None,
         joinable: bool = False,
+        visibility_filter: str | None = None,
     ) -> int:
         """
         Get total count of challenges.
@@ -632,7 +666,10 @@ class ChallengeService:
             Exception: If database operation fails
         """
         try:
+            has_visibility_columns = self.has_visibility_columns()
             query = self.db.table(self.table).select("*", count="exact")
+            if visibility_filter and has_visibility_columns:
+                query = query.eq("visibility", visibility_filter)
             if resolution_source:
                 query = query.ilike("resolution_source", resolution_source)
             if creator_id is not None:

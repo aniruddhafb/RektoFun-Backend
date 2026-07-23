@@ -49,6 +49,11 @@ class AdminChallengeWithdrawal(BaseModel):
     amount: int = Field(gt=0, description="USDC amount in base units (6 decimals)")
 
 
+class InvitationAction(BaseModel):
+    wallet_address: str = Field(min_length=20)
+    action: Literal["decline"]
+
+
 @router.post("/availability", response_model=ChallengeAvailabilityResponse)
 async def check_challenge_availability(
     challenge_data: ChallengeCreate,
@@ -112,6 +117,17 @@ async def create_challenge(
     service = get_challenge_service(db)
     position_service = get_position_service(db)
     try:
+        if challenge_data.visibility == "DIRECT":
+            if challenge_data.mode != "PVP" or not challenge_data.challenged_user_id:
+                raise HTTPException(status_code=400, detail="Direct challenges require a PVP recipient")
+            if challenge_data.creator == challenge_data.challenged_user_id:
+                raise HTTPException(status_code=400, detail="You cannot challenge yourself")
+            recipient = db.table("user").select("id").eq(
+                "id", challenge_data.challenged_user_id
+            ).limit(1).execute().data or []
+            if not recipient:
+                raise HTTPException(status_code=404, detail="Challenged user not found")
+            challenge_data.invitation_status = "PENDING"
         # Create the challenge first
         challenge = await service.create_challenge(challenge_data)
         print("challenge", challenge)
@@ -142,10 +158,15 @@ async def create_challenge(
                 logger.warning(
                     "Could not load creator username for Telegram alert: %s", error
                 )
-        await send_new_challenge_alert(challenge, creator_username)
+        if challenge.visibility != "DIRECT":
+            await send_new_challenge_alert(challenge, creator_username)
         if challenge.creator:
             await get_notification_service(db).notify_followers(
                 challenge.creator, challenge.id, "challenge_created"
+            )
+        if challenge.visibility == "DIRECT" and challenge.challenged_user_id:
+            await get_notification_service(db).notify_direct_challenge(
+                challenge.creator, challenge.challenged_user_id, challenge.id, "challenge_received"
             )
         print("created_position", created_position)
         # Start monitoring the challenge for price targets
@@ -162,12 +183,73 @@ async def create_challenge(
             status_code=status.HTTP_409_CONFLICT,
             detail=e.availability.model_dump(mode="json"),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create challenge: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create challenge"
         )
+
+
+@router.post("/{challenge_id}/invitation", response_model=ChallengeResponse)
+async def update_invitation(
+    challenge_id: int,
+    body: InvitationAction,
+    db: Client = Depends(get_db_client),
+):
+    challenge = await get_challenge_service(db).get_challenge(challenge_id)
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    user_rows = db.table("user").select("id").eq(
+        "pubkey", body.wallet_address
+    ).limit(1).execute().data or []
+    if not user_rows:
+        raise HTTPException(status_code=404, detail="User not found")
+    user_id = user_rows[0]["id"]
+    if challenge.visibility != "DIRECT" or challenge.challenged_user_id != user_id:
+        raise HTTPException(status_code=403, detail="This invitation is not for this user")
+    if challenge.invitation_status != "PENDING":
+        raise HTTPException(status_code=409, detail="Invitation is no longer pending")
+    result = db.table("challenge").update({"invitation_status": "DECLINED"}).eq(
+        "id", challenge_id
+    ).eq("invitation_status", "PENDING").execute()
+    if not result.data:
+        raise HTTPException(status_code=409, detail="Invitation was already updated")
+    try:
+        db.table("notification").delete().eq(
+            "event_key",
+            f"challenge_received:{challenge_id}:{challenge.creator}:{user_id}",
+        ).execute()
+    except Exception as error:
+        logger.warning("Could not remove declined invitation notification: %s", error)
+    await get_notification_service(db).notify_direct_challenge(
+        user_id, challenge.creator, challenge_id, "challenge_declined"
+    )
+    return ChallengeResponse(**result.data[0])
+
+
+@router.get("/{challenge_id}/can-accept")
+async def can_accept_direct_challenge(
+    challenge_id: int,
+    wallet_address: str = Query(..., min_length=20),
+    db: Client = Depends(get_db_client),
+):
+    challenge = await get_challenge_service(db).get_challenge(challenge_id)
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    if challenge.visibility != "DIRECT":
+        return {"allowed": True}
+    user_rows = db.table("user").select("id").eq("pubkey", wallet_address).limit(1).execute().data or []
+    allowed = bool(
+        user_rows
+        and user_rows[0]["id"] == challenge.challenged_user_id
+        and challenge.invitation_status == "PENDING"
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="This direct challenge is not available to you")
+    return {"allowed": True}
 
 
 @router.get(
@@ -187,6 +269,7 @@ async def list_challenges(
     search: Optional[str] = Query(None, min_length=1, max_length=100, description="Search challenge text or ticker"),
     joinable: bool = Query(False, description="Return only challenges currently open to new participants"),
     include_total: bool = Query(True, description="Run an exact count query (disable for infinite scrolling)"),
+    visibility: Optional[Literal["PUBLIC", "DIRECT"]] = Query(None, description="Explicit visibility filter"),
     db: Client = Depends(get_db_client)
 ):
     """
@@ -201,6 +284,7 @@ async def list_challenges(
         # Infinite-scroll clients only need to know whether another page exists.
         # Fetching one extra row avoids an exact COUNT over the filtered table.
         fetch_limit = limit if include_total else limit + 1
+        visibility_filter = visibility if visibility else (None if search or created_by is not None else "PUBLIC")
         challenges = await service.list_challenges(
             limit=fetch_limit,
             offset=offset,
@@ -211,6 +295,7 @@ async def list_challenges(
             expiring_soon=expiring_soon,
             search=search,
             joinable=joinable,
+            visibility_filter=visibility_filter,
         )
         has_more = len(challenges) > limit
         challenges = challenges[:limit]
@@ -222,6 +307,7 @@ async def list_challenges(
                 expiring_soon=expiring_soon,
                 search=search,
                 joinable=joinable,
+                visibility_filter=visibility_filter,
             )
             has_more = offset + len(challenges) < total
         else:

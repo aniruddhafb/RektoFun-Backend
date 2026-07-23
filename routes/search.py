@@ -7,7 +7,6 @@ from supabase import Client
 
 from services.challenge_service import get_challenge_service
 from services.database import get_request_db_client as get_db_client
-from services.leaderboard_service import LeaderboardService
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -57,6 +56,8 @@ async def search_modal(
     try:
         term = _safe_search_term(q or "")
         challenge_query = db.table("challenge").select(SEARCH_CHALLENGE_FIELDS)
+        if get_challenge_service(db).has_visibility_columns():
+            challenge_query = challenge_query.eq("visibility", "PUBLIC")
         if term:
             challenge_query = challenge_query.or_(
                 f"statement.ilike.%{term}%,ticker.ilike.%{term}%,trading_pair.ilike.%{term}%"
@@ -71,23 +72,39 @@ async def search_modal(
             user_query = user_query.or_(
                 f"username.ilike.%{term}%,pubkey.ilike.%{term}%,twitter_username.ilike.%{term}%"
             )
-        user_result = user_query.execute()
+        # Bound the candidate set before sorting. The modal only renders six
+        # users; downloading the complete user table made every open/search slow.
+        user_result = user_query.order("id", desc=True).limit(24).execute()
         users = sorted(
             user_result.data or [],
             key=lambda user: (len(user.get("followers") or []), user.get("id") or 0),
             reverse=True,
         )[:6]
-        leaderboard = await LeaderboardService(db).get_leaderboard(
-            period="all", limit=1000, offset=0, search=term or None,
-            sort="rank", order="asc",
-        )
-        metrics_by_id = {
-            str(user.get("id")): user
-            for user in (leaderboard.get("users") or [])
-            if isinstance(user, dict) and user.get("id") is not None
-        }
+        metrics_by_id = {}
+        try:
+            # One bounded database aggregation restores performance stats
+            # without invoking LeaderboardService's full ranking, pagination,
+            # role enrichment, and challenge-count scan.
+            metrics_result = db.rpc("get_challenge_leaderboard", {
+                "p_period": "all",
+                "p_limit": 100,
+                "p_offset": 0,
+                "p_search": term or None,
+                "p_sort": "pnl",
+                "p_order": "desc",
+            }).execute().data
+            metric_rows = metrics_result.get("users", []) if isinstance(metrics_result, dict) else []
+            metrics_by_id = {
+                str(row.get("id")): row
+                for row in metric_rows
+                if isinstance(row, dict) and row.get("id") is not None
+            }
+        except Exception:
+            logger.exception("Failed to load bounded search user metrics")
+        # Search cards already select their artwork from compact metadata.
+        # Avoid full leaderboard aggregation and category/profile enrichment in
+        # this latency-sensitive endpoint.
         challenges = [_compact_challenge(row) for row in (challenge_result.data or [])]
-        challenges = get_challenge_service(db).with_category_images(challenges)
         return {
             "challenges": challenges,
             "users": [_compact_user(row, metrics_by_id.get(str(row.get("id")))) for row in users],

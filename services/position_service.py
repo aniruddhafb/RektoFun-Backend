@@ -39,6 +39,17 @@ class PositionService:
         """
         try:
             data = position_data.model_dump(exclude_unset=True)
+            if position_data.challenge_id and position_data.creator:
+                challenge = await get_challenge_service(self.db).get_challenge(position_data.challenge_id)
+                if (
+                    challenge
+                    and challenge.visibility == "DIRECT"
+                    and position_data.creator != challenge.creator
+                ):
+                    if challenge.challenged_user_id != position_data.creator:
+                        raise PermissionError("This direct challenge is for another user")
+                    if challenge.invitation_status != "PENDING":
+                        raise ValueError("This invitation is no longer pending")
             result = self.db.table(self.table).insert(data).execute()
             
             if not result.data:
@@ -149,6 +160,14 @@ class PositionService:
                     participants=new_participants,
                 )
             )
+
+            if challenge.visibility == "DIRECT" and position.creator != challenge.creator:
+                self.db.table("challenge").update({"invitation_status": "ACCEPTED"}).eq(
+                    "id", position.challenge_id
+                ).eq("invitation_status", "PENDING").execute()
+                await get_notification_service(self.db).notify_direct_challenge(
+                    position.creator, challenge.creator, position.challenge_id, "challenge_accepted"
+                )
 
             if challenger_wallet:
                 from services.challenge_monitor_service import update_monitored_challenger_wallet

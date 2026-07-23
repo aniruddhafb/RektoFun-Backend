@@ -5,7 +5,7 @@ Challenge models for request/response validation and data transfer.
 import re
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -67,6 +67,9 @@ class ChallengeBase(BaseModel):
     final_price: Optional[float] = Field(None, description="Final price of the asset when challenge was resolved or expired")
     category: Optional[str] = Field(None, description="Category of the challenge")
     bet_info: Optional[dict[str, Any]] = Field(None, description="Additional bet metadata as JSON; includes a 'highest_bet' key holding the highest bet per side (TEAM_A/TEAM_B), each holding id/username/profile_image/pubkey/bet/twitter_username/user_type, and a 'team_count' key holding total_bets (count) and total_amount (sum of bets) per side (TEAM_A/TEAM_B)")
+    visibility: Literal["PUBLIC", "DIRECT"] = Field("PUBLIC", description="Whether anyone or only an invited user may join")
+    challenged_user_id: Optional[int] = Field(None, description="Recipient of a direct PVP invitation")
+    invitation_status: Optional[Literal["PENDING", "ACCEPTED", "DECLINED", "EXPIRED", "CANCELLED"]] = None
 
 
 class ChallengeCreate(ChallengeBase):
@@ -130,6 +133,7 @@ class ChallengeResponse(ChallengeBase):
     resolved_at: Optional[datetime] = Field(None, description="Exact UTC resolution timestamp")
     category_image: Optional[str] = Field(None, description="Image associated with the challenge category")
     creator_details: Optional[UserResponse] = Field(None, description="Details of the user who created the challenge")
+    challenged_user_details: Optional[UserResponse] = Field(None, description="Invited user for a direct challenge")
 
     class Config:
         from_attributes = True
