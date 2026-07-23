@@ -155,14 +155,32 @@ class NotificationService:
             .limit(limit)
             .execute()
         )
+        rows = result.data or []
+        challenge_ids = {
+            row["challenge_id"] for row in rows if row.get("challenge_id") is not None
+        }
+        invitation_statuses = {}
+        if challenge_ids:
+            challenge_rows = (
+                self.db.table("challenge")
+                .select("id,invitation_status")
+                .in_("id", list(challenge_ids))
+                .execute()
+                .data
+                or []
+            )
+            invitation_statuses = {
+                row["id"]: row.get("invitation_status") for row in challenge_rows
+            }
         notifications = []
-        for row in result.data or []:
+        for row in rows:
             actor = row.pop("actor", None) or {}
             notifications.append(NotificationResponse(
                 **row,
                 actor_username=actor.get("username"),
                 actor_profile_image=actor.get("profile_image"),
                 actor_wallet_address=actor.get("pubkey"),
+                invitation_status=invitation_statuses.get(row.get("challenge_id")),
             ))
         unread = sum(1 for item in notifications if not item.is_read)
         return NotificationListResponse(notifications=notifications, unread_count=unread)

@@ -482,14 +482,24 @@ class ChallengeService:
             list_select = CHALLENGE_LIST_SELECT
             if has_visibility_columns:
                 list_select = f"{list_select},visibility,challenged_user_id,invitation_status"
+
+            def apply_visibility_scope(query):
+                if not has_visibility_columns:
+                    return query
+                if visibility_filter:
+                    return query.eq("visibility", visibility_filter)
+                # Pending direct invitations stay private. Once accepted, the
+                # battle is live and becomes viewable in public discovery.
+                if creator_id is None:
+                    return query.or_(
+                        "visibility.eq.PUBLIC,and(visibility.eq.DIRECT,invitation_status.eq.ACCEPTED)"
+                    )
+                return query
+
             def build_query():
-                query = self.db.table(self.table).select(
-                    list_select
+                query = apply_visibility_scope(
+                    self.db.table(self.table).select(list_select)
                 )
-                # Direct invitations remain accessible by ID and on creator
-                # profiles, but never leak into the public discovery feed.
-                if visibility_filter and has_visibility_columns:
-                    query = query.eq("visibility", visibility_filter)
                 if resolution_source:
                     query = query.ilike("resolution_source", resolution_source)
                 if creator_id is not None:
@@ -530,9 +540,9 @@ class ChallengeService:
             rows: list[dict] = []
             skipped = 0
             for challenge_status in status_order:
-                count_query = self.db.table(self.table).select("id", count="exact")
-                if visibility_filter and has_visibility_columns:
-                    count_query = count_query.eq("visibility", visibility_filter)
+                count_query = apply_visibility_scope(
+                    self.db.table(self.table).select("id", count="exact")
+                )
                 if resolution_source:
                     count_query = count_query.ilike("resolution_source", resolution_source)
                 if creator_id is not None:
@@ -670,6 +680,10 @@ class ChallengeService:
             query = self.db.table(self.table).select("*", count="exact")
             if visibility_filter and has_visibility_columns:
                 query = query.eq("visibility", visibility_filter)
+            elif has_visibility_columns and creator_id is None:
+                query = query.or_(
+                    "visibility.eq.PUBLIC,and(visibility.eq.DIRECT,invitation_status.eq.ACCEPTED)"
+                )
             if resolution_source:
                 query = query.ilike("resolution_source", resolution_source)
             if creator_id is not None:

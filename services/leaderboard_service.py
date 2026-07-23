@@ -21,17 +21,19 @@ class LeaderboardService:
         """Delegate aggregation, ranking and pagination to PostgreSQL."""
         filtered = verification != "all"
         rank_by_created = sort in ("created_challenges", "rank")
+        rank_by_followers = sort == "followers"
+        requires_full_set = filtered or rank_by_created or rank_by_followers
         response = self.db.rpc("get_challenge_leaderboard", {
             "p_period": period,
             # Verification is user metadata rather than an aggregate held by
             # the legacy RPC. Fetch the ranked set before applying this filter
             # so pagination and totals remain correct.
-            "p_limit": 10000 if filtered or rank_by_created else limit,
-            "p_offset": 0 if filtered or rank_by_created else offset,
+            "p_limit": 10000 if requires_full_set else limit,
+            "p_offset": 0 if requires_full_set else offset,
             "p_search": search,
             # Creation ranking is applied below because the legacy RPC only
             # knows realized trading metrics.
-            "p_sort": "pnl" if rank_by_created else sort,
+            "p_sort": "pnl" if rank_by_created or rank_by_followers else sort,
             "p_order": order,
         }).execute()
         data = response.data
@@ -41,7 +43,7 @@ class LeaderboardService:
         # PostgreSQL caps this legacy RPC at 100 rows per call. Creation and
         # verification ranking must operate on the complete matching user set,
         # otherwise a prolific creator outside the first P&L page disappears.
-        if filtered or rank_by_created:
+        if requires_full_set:
             users = data.get("users")
             total = int(data.get("total") or 0)
             if isinstance(users, list):
@@ -52,7 +54,7 @@ class LeaderboardService:
                         "p_limit": 1000,
                         "p_offset": len(all_users),
                         "p_search": search,
-                        "p_sort": "pnl" if rank_by_created else sort,
+                        "p_sort": "pnl" if rank_by_created or rank_by_followers else sort,
                         "p_order": order,
                     }).execute().data
                     if not isinstance(next_page, dict):
@@ -72,7 +74,7 @@ class LeaderboardService:
                 try:
                     role_response = (
                         self.db.table("user")
-                        .select("id,user_type,twitter_username")
+                        .select("id,user_type,twitter_username,followers")
                         .in_("id", user_ids)
                         .execute()
                     )
@@ -85,6 +87,7 @@ class LeaderboardService:
                             profile = roles.get(str(user.get("id")), {})
                             user["user_type"] = profile.get("user_type", "user")
                             user["twitter_username"] = profile.get("twitter_username")
+                            user["followers"] = profile.get("followers") or []
                 except Exception:
                     # Role metadata must never prevent the core leaderboard
                     # response from loading (for example during schema rollout).
@@ -127,6 +130,18 @@ class LeaderboardService:
                 )
                 for index, user in enumerate(users, start=1):
                     user["rank"] = index
+            elif rank_by_followers:
+                reverse = order == "desc"
+                users.sort(
+                    key=lambda user: (
+                        len(user.get("followers") or []),
+                        user.get("pnl", 0),
+                        -int(user.get("id", 0)),
+                    ),
+                    reverse=reverse,
+                )
+                for index, user in enumerate(users, start=1):
+                    user["rank"] = index
         if filtered and isinstance(users, list):
             if verification == "x":
                 users = [
@@ -137,7 +152,24 @@ class LeaderboardService:
                 users = [user for user in users if user.get("user_type") == "moderator"]
             data["total"] = len(users)
             data["users"] = users[offset:offset + limit]
-        elif rank_by_created and isinstance(users, list):
+        elif (rank_by_created or rank_by_followers) and isinstance(users, list):
             data["total"] = len(users)
             data["users"] = users[offset:offset + limit]
+
+        # The summary card is platform-wide: count every challenge record,
+        # including expired, cancelled, direct and any other status/type.
+        try:
+            challenge_count_result = (
+                self.db.table("challenge")
+                .select("id", count="exact")
+                .limit(1)
+                .execute()
+            )
+            summary = data.get("summary")
+            if isinstance(summary, dict):
+                summary["total_challenges"] = challenge_count_result.count or 0
+        except Exception:
+            # Keep the RPC-provided summary available if the standalone count
+            # cannot be retrieved.
+            logger.exception("Failed to count all challenges for leaderboard summary")
         return data

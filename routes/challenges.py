@@ -284,7 +284,9 @@ async def list_challenges(
         # Infinite-scroll clients only need to know whether another page exists.
         # Fetching one extra row avoids an exact COUNT over the filtered table.
         fetch_limit = limit if include_total else limit + 1
-        visibility_filter = visibility if visibility else (None if search or created_by is not None else "PUBLIC")
+        # With no explicit filter, the service returns public challenges plus
+        # accepted direct battles. Pending invitations remain private.
+        visibility_filter = visibility
         challenges = await service.list_challenges(
             limit=fetch_limit,
             offset=offset,

@@ -20,6 +20,9 @@ class NotificationResponse(BaseModel):
     actor_username: Optional[str] = None
     actor_profile_image: Optional[str] = None
     actor_wallet_address: Optional[str] = None
+    invitation_status: Optional[
+        Literal["PENDING", "ACCEPTED", "DECLINED", "EXPIRED", "CANCELLED"]
+    ] = None
 
 
 class NotificationListResponse(BaseModel):

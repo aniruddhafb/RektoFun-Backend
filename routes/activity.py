@@ -180,7 +180,7 @@ async def list_activity(
             joined_challenge_ids.add(challenge["id"])
             events.append({
                 "id": f"joined-{position['id']}",
-                "type": "joined",
+                "type": "accepted" if challenge.get("visibility") == "DIRECT" else "joined",
                 "occurredAt": position.get("created_at"),
                 "challenge": challenge,
                 "actor": users.get(position.get("creator")),
